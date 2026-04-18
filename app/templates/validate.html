@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Validar Documento — {{ settings.VOTE_TITLE }}{% endblock %}
+
+{% block content %}
+<div class="page-center">
+    <div class="card card-lg animate-in">
+        <div class="card-glow"></div>
+
+        <div class="step-badge">Etapa 2 de 4</div>
+
+        <h1 class="card-title">Validar Documento</h1>
+        <p class="card-subtitle">
+            Insira o <strong>Código de Controle</strong> do seu Atestado de Matrícula do Júpiter.
+            Ele está no rodapé do documento.
+        </p>
+
+        {% if error %}
+        <div class="alert alert-error animate-shake">
+            <span class="alert-icon">⚠️</span>
+            <span>{{ error }}</span>
+        </div>
+        {% endif %}
+
+        <form action="/validate" method="post" class="validate-form" id="validate-form">
+            <label class="input-label" for="code-group-1">Código de Controle</label>
+
+            <div class="code-input-grid">
+                <div class="code-group">
+                    <input type="text" class="code-input" maxlength="4" data-group="1" id="code-group-1"
+                           autocomplete="off" spellcheck="false" autofocus
+                           placeholder="XXXX">
+                </div>
+                <span class="code-separator">–</span>
+                <div class="code-group">
+                    <input type="text" class="code-input" maxlength="4" data-group="2" id="code-group-2"
+                           autocomplete="off" spellcheck="false"
+                           placeholder="XXXX">
+                </div>
+                <span class="code-separator">–</span>
+                <div class="code-group">
+                    <input type="text" class="code-input" maxlength="4" data-group="3" id="code-group-3"
+                           autocomplete="off" spellcheck="false"
+                           placeholder="XXXX">
+                </div>
+                <span class="code-separator">–</span>
+                <div class="code-group">
+                    <input type="text" class="code-input" maxlength="4" data-group="4" id="code-group-4"
+                           autocomplete="off" spellcheck="false"
+                           placeholder="XXXX">
+                </div>
+            </div>
+
+            <!-- Hidden field that combines all groups -->
+            <input type="hidden" name="control_code" id="control-code-combined">
+
+            <button type="submit" class="btn btn-primary btn-lg btn-block" id="btn-validate" disabled>
+                <span class="btn-text">Validar Documento</span>
+                <span class="btn-loading" style="display: none;">
+                    <span class="spinner"></span>
+                    Consultando portal USP...
+                </span>
+            </button>
+        </form>
+
+        <div class="info-box">
+            <h3>🔒 O que acontece com seus dados?</h3>
+            <ul>
+                <li>O código é usado <strong>apenas para consultar</strong> o portal da USP</li>
+                <li>Extraímos somente o <strong>curso</strong> (elegibilidade) e o <strong>RG</strong> (deduplicação)</li>
+                <li>O RG é convertido em um <strong>hash irreversível</strong> e descartado imediatamente</li>
+                <li><strong>Nenhum dado pessoal é armazenado</strong> — nem no servidor, nem no banco</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-advance entre grupos de código e combine no hidden field
+    document.addEventListener('DOMContentLoaded', () => {
+        const groups = document.querySelectorAll('.code-input');
+        const combined = document.getElementById('control-code-combined');
+        const btnValidate = document.getElementById('btn-validate');
+        const form = document.getElementById('validate-form');
+
+        function updateCombined() {
+            const parts = Array.from(groups).map(g => g.value.toUpperCase());
+            combined.value = parts.join('-');
+            const totalChars = parts.join('').length;
+            btnValidate.disabled = totalChars < 16;
+        }
+
+        groups.forEach((input, index) => {
+            input.addEventListener('input', (e) => {
+                e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                updateCombined();
+
+                if (e.target.value.length === 4 && index < groups.length - 1) {
+                    groups[index + 1].focus();
+                }
+            });
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Backspace' && e.target.value === '' && index > 0) {
+                    groups[index - 1].focus();
+                }
+            });
+
+            // Handle paste of full code
+            input.addEventListener('paste', (e) => {
+                e.preventDefault();
+                const pasted = (e.clipboardData.getData('text') || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                if (pasted.length >= 16) {
+                    for (let i = 0; i < groups.length; i++) {
+                        groups[i].value = pasted.substring(i * 4, (i + 1) * 4);
+                    }
+                    updateCombined();
+                    groups[groups.length - 1].focus();
+                } else {
+                    e.target.value = pasted.substring(0, 4);
+                    updateCombined();
+                }
+            });
+        });
+
+        // Loading state on submit
+        form.addEventListener('submit', () => {
+            const btnText = btnValidate.querySelector('.btn-text');
+            const btnLoading = btnValidate.querySelector('.btn-loading');
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline-flex';
+            btnValidate.disabled = true;
+        });
+    });
+</script>
+{% endblock %}

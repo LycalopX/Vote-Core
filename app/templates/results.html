@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Resultados — {{ settings.VOTE_TITLE }}{% endblock %}
+
+{% block content %}
+<div class="page-center">
+    <div class="card card-lg animate-in">
+        <div class="card-glow"></div>
+        <h1 class="card-title">Resultados da Votação</h1>
+        <p class="card-subtitle">{{ settings.VOTE_TITLE }}</p>
+
+        <div class="results-grid">
+            {% for option, count in counts.items() %}
+            <div class="result-bar">
+                <div class="result-header">
+                    <span class="result-option {% if option == 'Sim' %}text-yes{% elif option == 'Não' %}text-no{% else %}text-null{% endif %}">
+                        {{ option }}
+                    </span>
+                    <span class="result-count">{{ count }} voto{{ 's' if count != 1 else '' }}</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill {% if option == 'Sim' %}bg-yes{% elif option == 'Não' %}bg-no{% else %}bg-null{% endif %}"
+                         style="width: 0%"
+                         data-target-width="{{ (count / total * 100) if total > 0 else 0 }}">
+                    </div>
+                </div>
+                <span class="result-pct">{{ '%.1f' % ((count / total * 100) if total > 0 else 0) }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="total-votes">
+            Total: <strong>{{ total }}</strong> voto{{ 's' if total != 1 else '' }}
+        </div>
+
+        <div class="card-actions">
+            <a href="/" class="btn btn-ghost">Voltar ao Início</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const fills = document.querySelectorAll('.progress-fill');
+    setTimeout(() => {
+        fills.forEach(fill => {
+            fill.style.width = fill.dataset.targetWidth + '%';
+        });
+    }, 300);
+});
+</script>
+{% endblock %}

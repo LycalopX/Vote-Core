@@ -1,0 +1,37 @@
+# Ambiente
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Database
+*.db
+*.db-journal
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dados temporários
+pdf_page*.png
+data/*
+
+# AI / Conversas de desenvolvimento
+.gemini/
+Agent.md
+
+# Playwright
+playwright-report/
+test-results/
+gemini/

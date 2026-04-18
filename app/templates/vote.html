@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Votar — {{ settings.VOTE_TITLE }}{% endblock %}
+
+{% block content %}
+<div class="page-center">
+    <div class="card card-lg animate-in">
+        <div class="card-glow"></div>
+
+        <div class="step-badge">Etapa 3 de 4</div>
+
+        <h1 class="card-title">{{ settings.VOTE_QUESTION }}</h1>
+        <p class="card-subtitle">
+            Selecione sua opção abaixo. Após confirmar, seu voto será registrado de forma anônima e irreversível.
+        </p>
+
+        {% if error is defined and error %}
+        <div class="alert alert-error animate-shake">
+            <span class="alert-icon">⚠️</span>
+            <span>{{ error }}</span>
+        </div>
+        {% endif %}
+
+        <form action="/vote" method="post" id="vote-form">
+            <input type="hidden" name="vote_choice" id="vote-choice-input">
+
+            <div class="vote-options">
+                {% for option in options %}
+                <button type="button"
+                        class="vote-card {% if option == 'Sim' %}vote-yes{% elif option == 'Não' %}vote-no{% else %}vote-null{% endif %}"
+                        data-vote="{{ option }}"
+                        id="vote-btn-{{ option | lower | replace('ã', 'a') }}">
+                    <span class="vote-icon">
+                        {% if option == 'Sim' %}✅{% elif option == 'Não' %}❌{% else %}⬜{% endif %}
+                    </span>
+                    <span class="vote-label">{{ option }}</span>
+                </button>
+                {% endfor %}
+            </div>
+        </form>
+
+        <!-- Confirmation Modal -->
+        <div class="modal-overlay" id="confirm-modal" style="display: none;">
+            <div class="modal-card animate-in">
+                <h2 class="modal-title">Confirmar Voto</h2>
+                <p class="modal-text">
+                    Você está prestes a votar <strong id="confirm-choice"></strong>.
+                    <br>Esta ação é <strong>irreversível</strong>.
+                </p>
+                <div class="modal-actions">
+                    <button class="btn btn-ghost" id="btn-cancel">Voltar</button>
+                    <button class="btn btn-primary" id="btn-confirm">
+                        Confirmar Voto
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="info-box info-box-sm">
+            <p>🔒 Seu voto será atrelado a um UUID aleatório — sem ligação com sua identidade.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const form = document.getElementById('vote-form');
+        const hiddenInput = document.getElementById('vote-choice-input');
+        const modal = document.getElementById('confirm-modal');
+        const confirmChoice = document.getElementById('confirm-choice');
+        const btnCancel = document.getElementById('btn-cancel');
+        const btnConfirm = document.getElementById('btn-confirm');
+        const voteCards = document.querySelectorAll('.vote-card');
+
+        let selectedVote = null;
+
+        voteCards.forEach(card => {
+            card.addEventListener('click', () => {
+                selectedVote = card.dataset.vote;
+
+                // Highlight selected
+                voteCards.forEach(c => c.classList.remove('selected'));
+                card.classList.add('selected');
+
+                // Show modal
+                confirmChoice.textContent = selectedVote;
+                modal.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+            });
+        });
+
+        btnCancel.addEventListener('click', () => {
+            modal.style.display = 'none';
+            document.body.style.overflow = '';
+            voteCards.forEach(c => c.classList.remove('selected'));
+            selectedVote = null;
+        });
+
+        btnConfirm.addEventListener('click', () => {
+            if (selectedVote) {
+                hiddenInput.value = selectedVote;
+                btnConfirm.disabled = true;
+                btnConfirm.textContent = 'Registrando...';
+                form.submit();
+            }
+        });
+
+        // Close modal on escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal.style.display === 'flex') {
+                btnCancel.click();
+            }
+        });
+
+        // Close modal on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                btnCancel.click();
+            }
+        });
+    });
+</script>
+{% endblock %}

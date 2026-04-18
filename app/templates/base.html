@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Sistema de votação anônimo e seguro para a EESC-USP">
+    <title>{% block title %}Urna Eletrônica EESC{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <div class="noise-overlay"></div>
+    <div class="gradient-bg"></div>
+
+    <header class="app-header">
+        <div class="header-inner">
+            <a href="/" class="logo">
+                <span class="logo-icon">🗳️</span>
+                <span class="logo-text">Urna EESC</span>
+            </a>
+            {% if user %}
+            <div class="user-info">
+                <span class="user-email">{{ user.email }}</span>
+                <form action="/auth/logout" method="post" class="logout-form">
+                    <button type="submit" class="btn-ghost btn-sm">Sair</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+    </header>
+
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="app-footer">
+        <p>Sistema auditável de votação anônima — Zero-Knowledge</p>
+        <p class="footer-sub">Nenhum dado pessoal é armazenado. <a href="/results">Ver resultados</a></p>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

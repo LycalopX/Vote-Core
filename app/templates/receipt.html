@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Recibo de Auditoria — {{ settings.VOTE_TITLE }}{% endblock %}
+
+{% block content %}
+<div class="page-center">
+    <div class="card card-lg animate-in">
+        <div class="card-glow card-glow-success"></div>
+
+        <div class="step-badge step-complete">✅ Concluído</div>
+
+        <h1 class="card-title">Voto Registrado!</h1>
+        <p class="card-subtitle">
+            Seu voto foi registrado de forma anônima. Guarde o código abaixo como comprovante.
+        </p>
+
+        <div class="receipt-box">
+            <label class="receipt-label">Seu Recibo de Auditoria</label>
+            <div class="receipt-uuid" id="receipt-uuid">
+                {{ vote.uuid }}
+            </div>
+            <button class="btn btn-ghost btn-sm" id="btn-copy" onclick="copyUUID()">
+                📋 Copiar
+            </button>
+        </div>
+
+        <div class="vote-summary">
+            <div class="vote-summary-item">
+                <span class="vote-summary-label">Seu voto:</span>
+                <span class="vote-summary-value
+                    {% if vote.vote == 'Sim' %}text-yes{% elif vote.vote == 'Não' %}text-no{% else %}text-null{% endif %}">
+                    {{ vote.vote }}
+                </span>
+            </div>
+            <div class="vote-summary-item">
+                <span class="vote-summary-label">Registrado em:</span>
+                <span class="vote-summary-value">{{ vote.created_at.strftime('%d/%m/%Y às %H:%M') }}</span>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <h2 class="section-title">Resultados Parciais</h2>
+        <div class="results-grid">
+            {% for option, count in counts.items() %}
+            <div class="result-bar">
+                <div class="result-header">
+                    <span class="result-option
+                        {% if option == 'Sim' %}text-yes{% elif option == 'Não' %}text-no{% else %}text-null{% endif %}">
+                        {{ option }}
+                    </span>
+                    <span class="result-count">{{ count }} voto{{ 's' if count != 1 else '' }}</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill
+                        {% if option == 'Sim' %}bg-yes{% elif option == 'Não' %}bg-no{% else %}bg-null{% endif %}"
+                         style="width: {{ (count / total * 100) if total > 0 else 0 }}%"
+                         data-target-width="{{ (count / total * 100) if total > 0 else 0 }}">
+                    </div>
+                </div>
+                <span class="result-pct">{{ '%.1f' % ((count / total * 100) if total > 0 else 0) }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="total-votes">
+            Total: <strong>{{ total }}</strong> voto{{ 's' if total != 1 else '' }} registrado{{ 's' if total != 1 else '' }}
+        </div>
+
+        <div class="card-actions">
+            <a href="/results" class="btn btn-ghost">Ver Resultados Completos</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function copyUUID() {
+        const uuid = document.getElementById('receipt-uuid').textContent.trim();
+        navigator.clipboard.writeText(uuid).then(() => {
+            const btn = document.getElementById('btn-copy');
+            btn.textContent = '✅ Copiado!';
+            setTimeout(() => { btn.textContent = '📋 Copiar'; }, 2000);
+        });
+    }
+
+    // Animate progress bars on load
+    document.addEventListener('DOMContentLoaded', () => {
+        const fills = document.querySelectorAll('.progress-fill');
+        setTimeout(() => {
+            fills.forEach(fill => {
+                const target = fill.dataset.targetWidth;
+                fill.style.width = target + '%';
+            });
+        }, 300);
+    });
+</script>
+{% endblock %}
