@@ -117,9 +117,9 @@ async def landing_page(request: Request):
     }
 
     return templates.TemplateResponse(
+        request,
         "login.html",
         {
-            "request": request,
             "user": user,
             "error": error_messages.get(error, ""),
             "settings": settings,
@@ -139,9 +139,9 @@ async def validate_page(request: Request):
         return RedirectResponse(url="/vote", status_code=302)
 
     return templates.TemplateResponse(
+        request,
         "validate.html",
         {
-            "request": request,
             "user": user,
             "settings": settings,
             "error": "",
@@ -168,8 +168,9 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
                 "não está na lista de elegíveis para esta votação."
             )
             return templates.TemplateResponse(
+                request,
                 "error.html",
-                {"request": request, "user": user, "settings": settings,
+                {"user": user, "settings": settings,
                  "error_title": "Não Elegível", "error_message": error},
             )
 
@@ -182,8 +183,9 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
 
         if await check_if_voted(voter_hash):
             return templates.TemplateResponse(
+                request,
                 "error.html",
-                {"request": request, "user": user, "settings": settings,
+                {"user": user, "settings": settings,
                  "error_title": "Voto Já Registrado",
                  "error_message": "Este documento já foi utilizado para votar. Cada eleitor pode votar apenas uma vez."},
             )
@@ -209,8 +211,9 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
         error = "Erro interno. Tente novamente em alguns instantes."
 
     return templates.TemplateResponse(
+        request,
         "validate.html",
-        {"request": request, "user": user, "settings": settings, "error": error},
+        {"user": user, "settings": settings, "error": error},
     )
 
 
@@ -230,9 +233,9 @@ async def vote_page(request: Request):
         return RedirectResponse(url=f"/receipt/{uuid}", status_code=302)
 
     return templates.TemplateResponse(
+        request,
         "vote.html",
         {
-            "request": request,
             "user": user,
             "settings": settings,
             "options": settings.vote_options_list,
@@ -257,9 +260,9 @@ async def vote_submit(request: Request, vote_choice: str = Form(...)):
     # Validar que a opção é válida
     if vote_choice not in settings.vote_options_list:
         return templates.TemplateResponse(
+            request,
             "vote.html",
             {
-                "request": request,
                 "user": user,
                 "settings": settings,
                 "options": settings.vote_options_list,
@@ -277,8 +280,9 @@ async def vote_submit(request: Request, vote_choice: str = Form(...)):
     if not hash_registered:
         # Race condition: alguém votou com o mesmo RG entre validate e vote
         return templates.TemplateResponse(
+            request,
             "error.html",
-            {"request": request, "user": user, "settings": settings,
+            {"user": user, "settings": settings,
              "error_title": "Voto Já Registrado",
              "error_message": "Este documento já foi utilizado para votar."},
         )
@@ -303,8 +307,9 @@ async def receipt_page(request: Request, vote_uuid: str):
     vote = await get_vote_by_uuid(vote_uuid)
     if not vote:
         return templates.TemplateResponse(
+            request,
             "error.html",
-            {"request": request, "user": user, "settings": settings,
+            {"user": user, "settings": settings,
              "error_title": "Recibo Não Encontrado",
              "error_message": "UUID de auditoria não encontrado."},
         )
@@ -313,9 +318,9 @@ async def receipt_page(request: Request, vote_uuid: str):
     total = await get_total_votes()
 
     return templates.TemplateResponse(
+        request,
         "receipt.html",
         {
-            "request": request,
             "user": user,
             "settings": settings,
             "vote": vote,
@@ -333,9 +338,9 @@ async def results_page(request: Request):
     total = await get_total_votes()
 
     return templates.TemplateResponse(
+        request,
         "results.html",
         {
-            "request": request,
             "user": user,
             "settings": settings,
             "counts": counts,

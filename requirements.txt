@@ -11,3 +11,8 @@ aiosqlite>=0.21
 pdfplumber>=0.11
 playwright>=1.49
 python-dotenv>=1.0
+
+# Testes
+pytest>=8.0
+pytest-asyncio>=1.0
+anyio>=4.0
