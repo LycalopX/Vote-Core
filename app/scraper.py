@@ -385,6 +385,13 @@ async def _fill_control_code(page: Page, code_chars: str):
         await submit_btn.first.click()
         logger.info("Botão de submit clicado")
 
+    # Aguardar o portal processar a requisição antes de começar a verificar
+    try:
+        await page.wait_for_load_state("networkidle", timeout=10000)
+        logger.info("Network idle após submit")
+    except Exception:
+        logger.info("Timeout esperando network idle — continuando")
+
 
 async def _wait_for_result(page: Page, captured_pdf: list) -> bytes:
     """
@@ -396,10 +403,12 @@ async def _wait_for_result(page: Page, captured_pdf: list) -> bytes:
     """
     max_wait = 30  # segundos
     poll_interval = 500  # ms
+    min_polls_before_error_check = 6  # aguarda pelo menos 3s antes de checar erros
 
-    for _ in range(max_wait * 1000 // poll_interval):
+    for poll_count in range(max_wait * 1000 // poll_interval):
         # Verificar se PDF foi capturado
         if captured_pdf:
+            logger.info("PDF capturado com %d bytes", len(captured_pdf[0]))
             return captured_pdf[0]
 
         # Verificar se há elemento <object> com blob (PDF viewer)
@@ -441,18 +450,24 @@ async def _wait_for_result(page: Page, captured_pdf: list) -> bytes:
                 "O portal pode ter mudado a forma de servir o documento."
             )
 
-        # Verificar mensagens de erro
-        page_text = await page.inner_text("body")
+        # Verificar mensagens de erro — mas só depois do grace period mínimo
+        # para evitar falsos positivos no texto da página antes do portal responder
+        if poll_count >= min_polls_before_error_check:
+            page_text = await page.inner_text("body")
 
-        if "não corresponde" in page_text.lower():
-            raise DocumentNotFoundError(
-                "O código de controle não corresponde a um documento emitido pela USP"
-            )
+            if "não corresponde" in page_text.lower():
+                raise DocumentNotFoundError(
+                    "O código de controle não corresponde a um documento emitido pela USP"
+                )
 
-        if "expirado" in page_text.lower() or "perdeu a sua validade" in page_text.lower():
-            raise DocumentExpiredError(
-                "O documento existe mas já expirou"
-            )
+            if "expirado" in page_text.lower() or "perdeu a sua validade" in page_text.lower():
+                raise DocumentExpiredError(
+                    "O documento existe mas já expirou"
+                )
+
+            if poll_count == min_polls_before_error_check:
+                logger.info("Aguardando resultado do portal... (texto atual: %s)",
+                            page_text[:100].replace('\n', ' '))
 
         await page.wait_for_timeout(poll_interval)
 
