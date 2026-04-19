@@ -7,12 +7,16 @@ Rotas:
   /auth/callback      Callback do Google OAuth
   /auth/logout        Limpa sessão
   /validate           Formulário do código de controle
-  /vote               Tela de votação (Sim/Não/Nulo)
-  /receipt/{uuid}     Recibo de auditoria
+  /vote               Tela de votação (Sim/Não/Nulo) + criação de senha de auditoria
+  /receipt/{uuid}     Recibo público de auditoria
+  /audit              Auditoria pessoal via NUSP + senha
   /results            Contagem pública dos votos
 """
 
 import logging
+import asyncio
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Form, Depends
@@ -23,8 +27,14 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
 from app.auth import setup_oauth, login, callback, logout, get_current_user, RedirectRequired
-from app.crypto import generate_voter_hash
-from app.database import init_db, close_db, check_if_voted, register_voter_hash, insert_vote, get_vote_counts, get_total_votes, get_vote_by_uuid
+from app.crypto import generate_voter_hash, generate_audit_id
+from app.database import (
+    init_db, close_db,
+    check_if_voted, register_voter_hash,
+    insert_vote, get_vote_counts, get_total_votes,
+    get_vote_by_uuid, get_vote_by_audit_id,
+    get_all_public_votes,
+)
 from app.scraper import validate_document, ScraperError, DocumentNotFoundError, DocumentExpiredError, ExtractionError
 
 logging.basicConfig(
@@ -32,6 +42,32 @@ logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# ─── Semaphore para limitar concorrência do Scraper ──────────────
+MAX_CONCURRENT_SCRAPERS = 4
+scraper_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SCRAPERS)
+
+# ─── Rate Limiter por IP (proteção anti-spam no /validate) ──────
+RATE_LIMIT_MAX_ATTEMPTS = 5       # máximo de tentativas por janela
+RATE_LIMIT_WINDOW_SECONDS = 120   # janela de 2 minutos
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """
+    Retorna True se o IP está dentro do limite.
+    Retorna False se excedeu (deve ser bloqueado).
+    """
+    now = time.monotonic()
+    # Limpar entradas expiradas
+    _rate_limit_store[ip] = [
+        t for t in _rate_limit_store[ip]
+        if now - t < RATE_LIMIT_WINDOW_SECONDS
+    ]
+    if len(_rate_limit_store[ip]) >= RATE_LIMIT_MAX_ATTEMPTS:
+        return False
+    _rate_limit_store[ip].append(now)
+    return True
 
 
 # ─── Lifecycle ───────────────────────────────────────────────────
@@ -55,7 +91,7 @@ settings = get_settings()
 app = FastAPI(
     title="Urna Eletrônica EESC",
     description="Sistema de votação anônimo zero-knowledge para a EESC-USP",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url=None,
@@ -134,7 +170,6 @@ async def validate_page(request: Request):
     if not user:
         return RedirectResponse(url="/", status_code=302)
 
-    # Se já validou e tem dados na sessão, pular para votação
     if request.session.get("validated"):
         return RedirectResponse(url="/vote", status_code=302)
 
@@ -151,16 +186,49 @@ async def validate_page(request: Request):
 
 @app.post("/validate", response_class=HTMLResponse)
 async def validate_submit(request: Request, control_code: str = Form(...)):
-    """Processa o código de controle: scraper → validação → HMAC."""
+    """Processa o código de controle: scraper → validação → hash do NUSP."""
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/", status_code=302)
 
     error = ""
     try:
-        # ── Fase B: Validação Volátil ──
-        logger.info("Validando documento para %s", user.get("email", "?"))
-        doc_data = await validate_document(control_code)
+        # ── Rate limit por IP ──
+        client_ip = request.client.host if request.client else "unknown"
+        if not _check_rate_limit(client_ip):
+            logger.warning("Rate limit excedido para IP %s", client_ip)
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                {
+                    "user": user,
+                    "settings": settings,
+                    "error_title": "Muitas Tentativas",
+                    "error_message": (
+                        f"Você excedeu o limite de {RATE_LIMIT_MAX_ATTEMPTS} "
+                        f"tentativas em {RATE_LIMIT_WINDOW_SECONDS // 60} minutos. "
+                        "Aguarde e tente novamente."
+                    ),
+                },
+            )
+
+        # ── Fase B: Validação Volátil com limite de concorrência ──
+        logger.info("Validando documento para %s (IP: %s)", user.get("email", "?"), client_ip)
+        try:
+            async with asyncio.timeout(60):
+                async with scraper_semaphore:
+                    doc_data = await validate_document(control_code)
+        except TimeoutError:
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                {
+                    "user": user,
+                    "settings": settings,
+                    "error_title": "Servidor Ocupado",
+                    "error_message": "Muitos alunos validando ao mesmo tempo. Aguarde 1 minuto e tente novamente.",
+                },
+            )
 
         if not doc_data.is_eligible:
             error = (
@@ -175,11 +243,7 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
             )
 
         # ── Fase C: Catraca de Deduplicação ──
-        voter_hash = generate_voter_hash(doc_data.rg, settings.SALT_KEY)
-
-        # RG sai de escopo aqui — nunca mais é referenciado
-        # doc_data será garbage-collected quando esta função retornar
-        del doc_data
+        voter_hash = generate_voter_hash(doc_data.nusp, settings.SALT_KEY)
 
         if await check_if_voted(voter_hash):
             return templates.TemplateResponse(
@@ -190,9 +254,14 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
                  "error_message": "Este documento já foi utilizado para votar. Cada eleitor pode votar apenas uma vez."},
             )
 
-        # Salvar hash na sessão temporariamente para o próximo step
+        # Salvar hash e NUSP na sessão temporariamente para o próximo step
+        # NUSP é necessário para gerar o audit_id na tela de voto
         request.session["voter_hash"] = voter_hash
+        request.session["nusp"] = doc_data.nusp
         request.session["validated"] = True
+
+        # doc_data descartado — NUSP e RG saem de escopo aqui
+        del doc_data
 
         return RedirectResponse(url="/vote", status_code=302)
 
@@ -206,7 +275,7 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
         error = f"Erro ao acessar o portal da USP: {e}"
     except ValueError as e:
         error = str(e)
-    except Exception as e:
+    except Exception:
         logger.exception("Erro inesperado na validação")
         error = "Erro interno. Tente novamente em alguns instantes."
 
@@ -227,10 +296,9 @@ async def vote_page(request: Request):
     if not request.session.get("validated"):
         return RedirectResponse(url="/validate", status_code=302)
 
-    # Verificar se já votou (hash já consumido)
     if request.session.get("voted"):
-        uuid = request.session.get("vote_uuid", "")
-        return RedirectResponse(url=f"/receipt/{uuid}", status_code=302)
+        vote_uuid = request.session.get("vote_uuid", "")
+        return RedirectResponse(url=f"/receipt/{vote_uuid}", status_code=302)
 
     return templates.TemplateResponse(
         request,
@@ -244,8 +312,12 @@ async def vote_page(request: Request):
 
 
 @app.post("/vote", response_class=HTMLResponse)
-async def vote_submit(request: Request, vote_choice: str = Form(...)):
-    """Registra o voto anônimo."""
+async def vote_submit(
+    request: Request,
+    vote_choice: str = Form(...),
+    audit_password: str = Form(...),
+):
+    """Registra o voto anônimo com audit_id gerado a partir do NUSP + senha."""
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/", status_code=302)
@@ -254,8 +326,8 @@ async def vote_submit(request: Request, vote_choice: str = Form(...)):
         return RedirectResponse(url="/validate", status_code=302)
 
     if request.session.get("voted"):
-        uuid = request.session.get("vote_uuid", "")
-        return RedirectResponse(url=f"/receipt/{uuid}", status_code=302)
+        vote_uuid = request.session.get("vote_uuid", "")
+        return RedirectResponse(url=f"/receipt/{vote_uuid}", status_code=302)
 
     # Validar que a opção é válida
     if vote_choice not in settings.vote_options_list:
@@ -270,15 +342,27 @@ async def vote_submit(request: Request, vote_choice: str = Form(...)):
             },
         )
 
-    # ── Fase C (continuação): Registrar hash ──
+    # Validar senha mínima
+    if len(audit_password.strip()) < 4:
+        return templates.TemplateResponse(
+            request,
+            "vote.html",
+            {
+                "user": user,
+                "settings": settings,
+                "options": settings.vote_options_list,
+                "error": "A senha de auditoria deve ter pelo menos 4 caracteres.",
+            },
+        )
+
     voter_hash = request.session.get("voter_hash")
-    if not voter_hash:
+    nusp = request.session.get("nusp")
+    if not voter_hash or not nusp:
         return RedirectResponse(url="/validate", status_code=302)
 
-    # Atômico: registrar hash + inserir voto
+    # ── Fase C (continuação): Registrar hash de forma atômica ──
     hash_registered = await register_voter_hash(voter_hash)
     if not hash_registered:
-        # Race condition: alguém votou com o mesmo RG entre validate e vote
         return templates.TemplateResponse(
             request,
             "error.html",
@@ -287,11 +371,13 @@ async def vote_submit(request: Request, vote_choice: str = Form(...)):
              "error_message": "Este documento já foi utilizado para votar."},
         )
 
-    # ── Fase D: Registrar voto anônimo ──
-    vote_uuid = await insert_vote(vote_choice)
+    # ── Fase D: Gerar audit_id e registrar voto anônimo ──
+    audit_id = generate_audit_id(nusp, audit_password.strip(), settings.SALT_2)
+    vote_uuid = await insert_vote(vote_choice, audit_id)
 
     # Limpar dados sensíveis da sessão
     request.session.pop("voter_hash", None)
+    request.session.pop("nusp", None)
     request.session["voted"] = True
     request.session["vote_uuid"] = vote_uuid
 
@@ -301,7 +387,7 @@ async def vote_submit(request: Request, vote_choice: str = Form(...)):
 
 @app.get("/receipt/{vote_uuid}", response_class=HTMLResponse)
 async def receipt_page(request: Request, vote_uuid: str):
-    """Exibe o recibo de auditoria com o UUID."""
+    """Exibe o recibo público de auditoria com o UUID."""
     user = get_current_user(request)
 
     vote = await get_vote_by_uuid(vote_uuid)
@@ -330,12 +416,72 @@ async def receipt_page(request: Request, vote_uuid: str):
     )
 
 
+@app.get("/audit", response_class=HTMLResponse)
+async def audit_page(request: Request):
+    """Formulário de auditoria pessoal via NUSP + senha."""
+    user = get_current_user(request)
+    return templates.TemplateResponse(
+        request,
+        "audit.html",
+        {"user": user, "settings": settings,
+         "result": None, "my_uuid": None, "public_votes": [], "error": ""},
+    )
+
+
+@app.post("/audit", response_class=HTMLResponse)
+async def audit_submit(
+    request: Request,
+    nusp: str = Form(...),
+    audit_password: str = Form(...),
+):
+    """
+    Recalcula o audit_id a partir do NUSP + senha e busca o voto correspondente.
+    Retorna apenas a opção de voto — audit_id nunca é exposto.
+    """
+    user = get_current_user(request)
+
+    nusp_clean = nusp.strip()
+    password_clean = audit_password.strip()
+
+    if not nusp_clean or not password_clean:
+        return templates.TemplateResponse(
+            request,
+            "audit.html",
+            {"user": user, "settings": settings,
+             "result": None, "error": "Preencha o Número USP e a senha."},
+        )
+
+    audit_id = generate_audit_id(nusp_clean, password_clean, settings.SALT_2)
+    vote = await get_vote_by_audit_id(audit_id)
+
+    if not vote:
+        return templates.TemplateResponse(
+            request,
+            "audit.html",
+            {"user": user, "settings": settings,
+             "result": None, "my_uuid": None, "public_votes": [],
+             "error": "Nenhum voto encontrado para esta combinação de NUSP e senha."},
+        )
+
+    # Voto encontrado — também busca todos os votos públicos para transparência
+    public_votes = await get_all_public_votes()
+
+    return templates.TemplateResponse(
+        request,
+        "audit.html",
+        {"user": user, "settings": settings,
+         "result": vote.vote, "my_uuid": vote.uuid,
+         "public_votes": public_votes, "error": ""},
+    )
+
+
 @app.get("/results", response_class=HTMLResponse)
 async def results_page(request: Request):
-    """Contagem pública dos votos — sem identificação."""
+    """Contagem pública dos votos + lista de transparência (Tabela 3)."""
     user = get_current_user(request)
     counts = await get_vote_counts()
     total = await get_total_votes()
+    public_votes = await get_all_public_votes()
 
     return templates.TemplateResponse(
         request,
@@ -345,6 +491,7 @@ async def results_page(request: Request):
             "settings": settings,
             "counts": counts,
             "total": total,
+            "public_votes": public_votes,
         },
     )
 

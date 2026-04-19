@@ -31,10 +31,6 @@
                     {{ vote.vote }}
                 </span>
             </div>
-            <div class="vote-summary-item">
-                <span class="vote-summary-label">Registrado em:</span>
-                <span class="vote-summary-value">{{ vote.created_at.strftime('%d/%m/%Y às %H:%M') }}</span>
-            </div>
         </div>
 
         <div class="divider"></div>
@@ -64,6 +60,10 @@
 
         <div class="total-votes">
             Total: <strong>{{ total }}</strong> voto{{ 's' if total != 1 else '' }} registrado{{ 's' if total != 1 else '' }}
+        </div>
+
+        <div class="info-box info-box-sm" style="margin-top: 1rem;">
+            <p>🔑 <strong>Perdeu o UUID?</strong> Acesse <a href="/audit">/audit</a> e insira seu Número USP + a senha que você criou para verificar seu voto.</p>
         </div>
 
         <div class="card-actions">

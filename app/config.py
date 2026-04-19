@@ -19,7 +19,8 @@ class Settings(BaseSettings):
 
     # ─── Segurança ───────────────────────────────────────────────
     SECRET_KEY: str  # Obrigatório — chave para assinar cookies de sessão
-    SALT_KEY: str  # Obrigatório — chave HMAC para hash dos RGs
+    SALT_KEY: str    # Obrigatório — chave HMAC para hash do NUSP (id_voto)
+    SALT_2: str      # Obrigatório — chave HMAC para hash do NUSP + senha (audit_id)
 
     # ─── Aplicação ───────────────────────────────────────────────
     BASE_URL: str = "http://localhost:8000"

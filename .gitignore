@@ -10,10 +10,13 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
 
-# Database
+# Database (SQLite + WAL mode files)
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 
 # IDE
 .vscode/
@@ -23,13 +26,14 @@ build/
 .DS_Store
 Thumbs.db
 
-# Dados temporários
+# Dados temporários do scraper
 pdf_page*.png
 data/*
 
 # AI / Conversas de desenvolvimento
 .gemini/
 Agent.md
+gemini/
 
 # PM2 logs
 logs/
@@ -37,4 +41,6 @@ logs/
 # Playwright
 playwright-report/
 test-results/
-gemini/
+
+# Referências de chat (dados sensíveis)
+temp/

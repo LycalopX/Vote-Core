@@ -13,80 +13,111 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from app.crypto import generate_voter_hash, normalize_rg, verify_hash_match
+from app.crypto import generate_voter_hash, generate_audit_id, verify_voter_hash
 from app.database import (
     init_db, close_db,
     check_if_voted, register_voter_hash,
-    insert_vote, get_vote_counts, get_total_votes, get_vote_by_uuid,
+    insert_vote, get_vote_counts, get_total_votes,
+    get_vote_by_uuid, get_vote_by_audit_id,
 )
+from app.models import Vote
 
-# ─── Crypto ──────────────────────────────────────────────────────────────────
 
-
-class TestNormalizeRG:
-    def test_remove_pontos_e_traco(self):
-        assert normalize_rg("13.560.200-9") == "135602009"
-
-    def test_sem_formatacao(self):
-        assert normalize_rg("135602009") == "135602009"
-
-    def test_traco_sem_pontos(self):
-        assert normalize_rg("13560200-9") == "135602009"
-
-    def test_espacos_extras(self):
-        assert normalize_rg("  13.560.200-9  ") == "135602009"
-
-    def test_maiusculas_preservadas(self):
-        # RG com letra (ex: SP)
-        assert normalize_rg("99.999.999-X") == "99999999X"
+# ─── Crypto: generate_voter_hash ─────────────────────────────────
 
 
 class TestGenerateVoterHash:
     SALT = "test-salt-key-32chars-xxxxxxxxxxxxx"
 
-    def test_mesmo_rg_mesmo_hash(self):
-        h1 = generate_voter_hash("13.560.200-9", self.SALT)
-        h2 = generate_voter_hash("13560200-9", self.SALT)
-        assert h1 == h2, "RG formatado diferente deve gerar mesmo hash"
+    def test_mesmo_nusp_mesmo_hash(self):
+        h1 = generate_voter_hash("12345678", self.SALT)
+        h2 = generate_voter_hash("12345678", self.SALT)
+        assert h1 == h2, "Mesmo NUSP deve gerar mesmo hash"
 
-    def test_rgs_diferentes_hashes_diferentes(self):
-        h1 = generate_voter_hash("13.560.200-9", self.SALT)
-        h2 = generate_voter_hash("99.999.999-X", self.SALT)
+    def test_nusps_diferentes_hashes_diferentes(self):
+        h1 = generate_voter_hash("12345678", self.SALT)
+        h2 = generate_voter_hash("87654321", self.SALT)
         assert h1 != h2
 
     def test_hash_64_chars_hexadecimal(self):
-        h = generate_voter_hash("12345678-9", self.SALT)
+        h = generate_voter_hash("12345678", self.SALT)
         assert len(h) == 64
         assert all(c in "0123456789abcdef" for c in h)
 
     def test_salt_diferente_hash_diferente(self):
-        h1 = generate_voter_hash("12345678-9", "salt-a")
-        h2 = generate_voter_hash("12345678-9", "salt-b")
-        assert h1 != h2, "Mesmo RG com salt diferente deve gerar hash diferente"
+        h1 = generate_voter_hash("12345678", "salt-a")
+        h2 = generate_voter_hash("12345678", "salt-b")
+        assert h1 != h2, "Mesmo NUSP com salt diferente deve gerar hash diferente"
+
+    def test_nusp_vazio_raise(self):
+        with pytest.raises(ValueError):
+            generate_voter_hash("", self.SALT)
+
+    def test_nusp_com_espacos_normalizado(self):
+        h1 = generate_voter_hash("12345678", self.SALT)
+        h2 = generate_voter_hash("  12345678  ", self.SALT)
+        assert h1 == h2, "Espaços devem ser removidos (strip)"
 
 
-class TestVerifyHashMatch:
+# ─── Crypto: generate_audit_id ───────────────────────────────────
+
+
+class TestGenerateAuditId:
+    SALT_2 = "test-salt-2-for-audit"
+
+    def test_deterministic(self):
+        a1 = generate_audit_id("12345678", "minhasenha", self.SALT_2)
+        a2 = generate_audit_id("12345678", "minhasenha", self.SALT_2)
+        assert a1 == a2, "Mesmos inputs devem gerar mesmo audit_id"
+
+    def test_senha_diferente_audit_diferente(self):
+        a1 = generate_audit_id("12345678", "senhaA", self.SALT_2)
+        a2 = generate_audit_id("12345678", "senhaB", self.SALT_2)
+        assert a1 != a2
+
+    def test_nusp_diferente_audit_diferente(self):
+        a1 = generate_audit_id("12345678", "mesmasenha", self.SALT_2)
+        a2 = generate_audit_id("87654321", "mesmasenha", self.SALT_2)
+        assert a1 != a2
+
+    def test_salt2_diferente_audit_diferente(self):
+        a1 = generate_audit_id("12345678", "senha", "salt-x")
+        a2 = generate_audit_id("12345678", "senha", "salt-y")
+        assert a1 != a2, "SALT_2 diferente deve gerar audit_id diferente"
+
+    def test_audit_id_64_chars_hex(self):
+        a = generate_audit_id("12345678", "senha", self.SALT_2)
+        assert len(a) == 64
+        assert all(c in "0123456789abcdef" for c in a)
+
+    def test_audit_id_diferente_de_voter_hash(self):
+        """audit_id e voter_hash para o mesmo NUSP devem ser diferentes (salts diferentes)."""
+        vh = generate_voter_hash("12345678", "salt-1")
+        ai = generate_audit_id("12345678", "qualquersenha", "salt-1")
+        assert vh != ai, "audit_id inclui a senha, voter_hash não"
+
+
+# ─── Crypto: verify_voter_hash ───────────────────────────────────
+
+
+class TestVerifyVoterHash:
     SALT = "verification-salt"
 
     def test_verifica_correto(self):
-        h = generate_voter_hash("13.560.200-9", self.SALT)
-        assert verify_hash_match("13.560.200-9", self.SALT, h)
+        h = generate_voter_hash("12345678", self.SALT)
+        assert verify_voter_hash("12345678", self.SALT, h)
 
-    def test_rejeita_rg_errado(self):
-        h = generate_voter_hash("13.560.200-9", self.SALT)
-        assert not verify_hash_match("99.999.999-X", self.SALT, h)
-
-    def test_rg_formatado_diferente_ainda_verifica(self):
-        h = generate_voter_hash("13.560.200-9", self.SALT)
-        assert verify_hash_match("135602009", self.SALT, h)
+    def test_rejeita_nusp_errado(self):
+        h = generate_voter_hash("12345678", self.SALT)
+        assert not verify_voter_hash("87654321", self.SALT, h)
 
     def test_rejeita_hash_adulterado(self):
-        h = generate_voter_hash("13.560.200-9", self.SALT)
+        h = generate_voter_hash("12345678", self.SALT)
         h_adulterado = h[:-1] + ("0" if h[-1] != "0" else "1")
-        assert not verify_hash_match("13.560.200-9", self.SALT, h_adulterado)
+        assert not verify_voter_hash("12345678", self.SALT, h_adulterado)
 
 
-# ─── Database ────────────────────────────────────────────────────────────────
+# ─── Database ────────────────────────────────────────────────────
 
 
 @pytest.fixture(scope="module")
@@ -131,17 +162,16 @@ async def test_deduplication_check_after_register():
 
 @pytest.mark.asyncio
 async def test_insert_vote_retorna_uuid():
-    uuid = await insert_vote("Sim")
+    uuid = await insert_vote("Sim", "audit_" + "x" * 60)
     assert isinstance(uuid, str)
     assert len(uuid) == 36  # formato UUID v4
 
 
 @pytest.mark.asyncio
 async def test_vote_counts_corretos():
-    # Inserir votos adicionais para contar
-    await insert_vote("Não")
-    await insert_vote("Nulo")
-    await insert_vote("Sim")
+    await insert_vote("Não", "audit_" + "y" * 60)
+    await insert_vote("Nulo", "audit_" + "z" * 60)
+    await insert_vote("Sim", "audit_" + "w" * 60)
 
     counts = await get_vote_counts()
     assert counts.get("Sim", 0) >= 2
@@ -152,14 +182,14 @@ async def test_vote_counts_corretos():
 @pytest.mark.asyncio
 async def test_total_votes_aumenta():
     total_antes = await get_total_votes()
-    await insert_vote("Sim")
+    await insert_vote("Sim", "audit_inc_" + "q" * 56)
     total_depois = await get_total_votes()
     assert total_depois == total_antes + 1
 
 
 @pytest.mark.asyncio
 async def test_get_vote_by_uuid_encontra():
-    uuid = await insert_vote("Não")
+    uuid = await insert_vote("Não", "audit_find_" + "r" * 55)
     vote = await get_vote_by_uuid(uuid)
     assert vote is not None
     assert vote.uuid == uuid
@@ -170,3 +200,35 @@ async def test_get_vote_by_uuid_encontra():
 async def test_get_vote_by_uuid_nao_encontra():
     vote = await get_vote_by_uuid("00000000-0000-0000-0000-000000000000")
     assert vote is None
+
+
+# ─── Database: audit_id ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_vote_by_audit_id_encontra():
+    audit = "audit_lookup_" + "s" * 53
+    uuid = await insert_vote("Sim", audit)
+    vote = await get_vote_by_audit_id(audit)
+    assert vote is not None
+    assert vote.uuid == uuid
+    assert vote.vote == "Sim"
+
+
+@pytest.mark.asyncio
+async def test_get_vote_by_audit_id_nao_encontra():
+    vote = await get_vote_by_audit_id("nonexistent_" + "0" * 54)
+    assert vote is None
+
+
+# ─── Model: Vote sem created_at ──────────────────────────────────
+
+
+def test_vote_model_sem_created_at():
+    """A Tabela 2 (votes) NÃO deve ter campo created_at — timestamp só fica na Tabela 1."""
+    columns = {c.name for c in Vote.__table__.columns}
+    assert "created_at" not in columns, (
+        "Vote NÃO deve ter created_at! "
+        "Timestamp na Tabela 2 cria vetor de correlação com a Tabela 1."
+    )
+    assert "audit_id" in columns, "Vote deve ter campo audit_id"

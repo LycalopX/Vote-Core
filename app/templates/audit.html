@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Auditoria Pessoal — {{ settings.VOTE_TITLE }}{% endblock %}
+
+{% block content %}
+<div class="page-center">
+    <div class="card card-lg animate-in">
+        <div class="card-glow"></div>
+
+        <h1 class="card-title">Verificar Meu Voto</h1>
+        <p class="card-subtitle">
+            Insira seu Número USP e a senha pessoal que você criou na hora de votar.
+            Nenhum dado é armazenado nesta consulta.
+        </p>
+
+        {% if error %}
+        <div class="alert alert-error animate-shake">
+            <span class="alert-icon">⚠️</span>
+            <span>{{ error }}</span>
+        </div>
+        {% endif %}
+
+        {% if result is not none and result %}
+        <div class="alert alert-success">
+            <span class="alert-icon">✅</span>
+            <span>
+                Seu voto computado foi: <strong
+                class="{% if result == 'Sim' %}text-yes{% elif result == 'Não' %}text-no{% else %}text-null{% endif %}">
+                    {{ result }}
+                </strong>
+            </span>
+        </div>
+        {% if my_uuid %}
+        <div class="receipt-box" style="margin-bottom: 1.5rem;">
+            <span class="receipt-label">Seu UUID</span>
+            <div class="receipt-uuid">{{ my_uuid }}</div>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">
+                Encontre este UUID na tabela abaixo para confirmar a integridade.
+            </p>
+        </div>
+        {% endif %}
+        {% endif %}
+
+        <form action="/audit" method="post" id="audit-form">
+            <label class="input-label" for="audit-nusp">Número USP (NUSP)</label>
+            <input type="text" id="audit-nusp" name="nusp"
+                   class="code-input" style="width:100%; margin-bottom:1rem;"
+                   placeholder="Ex: 12345678" maxlength="8"
+                   pattern="[0-9]{7,8}" inputmode="numeric"
+                   autocomplete="off" required>
+
+            <label class="input-label" for="audit-password">Senha de Auditoria</label>
+            <input type="password" id="audit-password" name="audit_password"
+                   class="code-input" style="width:100%; margin-bottom:1.5rem;"
+                   placeholder="Senha que você criou ao votar"
+                   minlength="4" required autocomplete="current-password">
+
+            <button type="submit" class="btn btn-primary btn-lg btn-block" id="btn-audit">
+                <span class="btn-text">Verificar Voto</span>
+                <span class="btn-loading" style="display: none;">
+                    <span class="spinner"></span>
+                    Consultando...
+                </span>
+            </button>
+        </form>
+
+        {% if public_votes %}
+        <div class="divider"></div>
+
+        <h2 class="section-title">📋 Registro Público de Votos</h2>
+        <p class="transparency-hint">
+            Todos os votos registrados. {% if my_uuid %}O seu está destacado em azul.{% endif %}
+        </p>
+
+        <div class="votes-table-wrapper">
+            <table class="votes-table">
+                <thead>
+                    <tr>
+                        <th class="col-num">#</th>
+                        <th class="col-uuid">UUID</th>
+                        <th class="col-vote">Voto</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pv in public_votes %}
+                    <tr {% if my_uuid and pv.uuid == my_uuid %}class="my-vote-row" id="my-vote"{% endif %}>
+                        <td class="col-num">{{ loop.index }}</td>
+                        <td class="col-uuid"><code>{{ pv.uuid }}</code></td>
+                        <td class="col-vote">
+                            <span class="vote-chip {% if pv.vote == 'Sim' %}chip-yes{% elif pv.vote == 'Não' %}chip-no{% else %}chip-null{% endif %}">
+                                {{ pv.vote }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <div class="info-box" style="margin-top: 1rem;">
+            <h3>🔒 Como funciona?</h3>
+            <ul>
+                <li>Seu NUSP + senha são combinados para gerar um código de busca</li>
+                <li>O código é consultado no banco — <strong>nunca armazenamos sua senha</strong></li>
+                <li>Apenas a opção de voto é retornada</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.getElementById('audit-form').addEventListener('submit', (e) => {
+        const btn = document.getElementById('btn-audit');
+        if (btn.dataset.loading === 'true') { e.preventDefault(); return; }
+        btn.dataset.loading = 'true';
+        btn.querySelector('.btn-text').style.display = 'none';
+        btn.querySelector('.btn-loading').style.display = 'inline-flex';
+        btn.style.pointerEvents = 'none';
+        btn.style.opacity = '0.7';
+    });
+
+    // Auto-scroll to the user's highlighted vote
+    const myVote = document.getElementById('my-vote');
+    if (myVote) {
+        setTimeout(() => {
+            myVote.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 500);
+    }
+</script>
+{% endblock %}

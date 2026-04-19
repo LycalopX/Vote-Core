@@ -504,6 +504,8 @@ body {
     align-items: center;
     justify-content: center;
     padding: 1rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .modal-card {
@@ -823,6 +825,199 @@ body {
 
 .footer-sub a:hover {
     text-decoration: underline;
+}
+
+/* ─── Audit Password Section ────────────────── */
+.audit-password-section {
+    margin-bottom: 1.25rem;
+}
+
+.audit-password-hint {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-bottom: 1.25rem;
+    line-height: 1.4;
+}
+
+.password-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.password-field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.password-field-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.password-input {
+    width: 100%;
+    padding: 0.8rem;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1.5px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    outline: none;
+    transition: all var(--transition-base);
+}
+
+.password-input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.4;
+    letter-spacing: 0.05em;
+    font-weight: 400;
+}
+
+.password-input:focus {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-primary-glow);
+    background: rgba(99, 102, 241, 0.05);
+}
+
+.password-match-msg {
+    font-size: 0.82rem;
+    margin-top: 0.4rem;
+    font-weight: 500;
+}
+
+.match-ok { color: var(--accent-yes); }
+.match-err { color: var(--accent-no); }
+
+.vote-hint {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 0.5rem;
+}
+
+.vote-card:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* ─── Transparency Table (Public Votes) ────── */
+.transparency-hint {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+    line-height: 1.4;
+}
+
+.votes-table-wrapper {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    margin-bottom: 1.5rem;
+}
+
+.votes-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.votes-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.votes-table th {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.7rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.votes-table td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    color: var(--text-primary);
+}
+
+.votes-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.votes-table .col-num {
+    width: 40px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
+.votes-table .col-uuid code {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--accent-primary);
+    word-break: break-all;
+}
+
+.votes-table .col-vote {
+    width: 80px;
+    text-align: center;
+}
+
+.vote-chip {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.chip-yes {
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--accent-yes);
+}
+
+.chip-no {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--accent-no);
+}
+
+.chip-null {
+    background: rgba(148, 163, 184, 0.15);
+    color: var(--accent-null);
+}
+
+.my-vote-row {
+    background: rgba(99, 102, 241, 0.1) !important;
+    border-left: 3px solid var(--accent-primary);
+}
+
+.my-vote-row td {
+    font-weight: 600;
+}
+
+.empty-state {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 2rem;
+    font-size: 0.9rem;
 }
 
 /* ─── Responsive ────────────────────────────── */

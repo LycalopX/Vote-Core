@@ -125,12 +125,21 @@
         });
 
         // Loading state on submit
-        form.addEventListener('submit', () => {
+        form.addEventListener('submit', (e) => {
+            if (btnValidate.dataset.loading === 'true') {
+                e.preventDefault();
+                return;
+            }
+            btnValidate.dataset.loading = 'true';
+            
             const btnText = btnValidate.querySelector('.btn-text');
             const btnLoading = btnValidate.querySelector('.btn-loading');
             btnText.style.display = 'none';
             btnLoading.style.display = 'inline-flex';
-            btnValidate.disabled = true;
+            
+            // Prevent double clicks safely without cancelling the submit event
+            btnValidate.style.pointerEvents = 'none';
+            btnValidate.style.opacity = '0.7';
         });
     });
 </script>

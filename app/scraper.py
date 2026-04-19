@@ -28,10 +28,11 @@ logger = logging.getLogger(__name__)
 class DocumentData:
     """Dados extraídos do atestado do Júpiter."""
 
-    rg: str  # RG bruto ex: '13.560.200-9'
-    curso: str  # Nome do curso ex: 'Engenharia de Computação'
-    unidade: str  # Unidade ex: 'Escola de Engenharia de São Carlos'
-    nome: str  # Nome do aluno
+    nusp: str       # Número USP ex: '12345678' (usado para hash de deduplicação)
+    rg: str         # RG bruto ex: '13.560.200-9' (apenas para log de debug parcial)
+    curso: str      # Nome do curso ex: 'Engenharia de Computação'
+    unidade: str    # Unidade ex: 'Escola de Engenharia de São Carlos'
+    nome: str       # Nome do aluno
     is_eligible: bool  # Se o aluno é elegível para votar
 
 
@@ -128,11 +129,19 @@ def extract_data_from_pdf(pdf_bytes: bytes) -> DocumentData:
 
     logger.debug("Texto extraído do PDF (%d chars): %s...", len(full_text), full_text[:200])
 
-    # ── Extrair RG ──
+    # ── Extrair NUSP (dado primário para deduplicação) ──
+    nusp = ""
+    nusp_match = NUSP_PATTERN.search(full_text)
+    if nusp_match:
+        nusp = nusp_match.group(1).strip()
+    if not nusp:
+        raise ExtractionError("NUSP (Número USP) não encontrado no documento")
+
+    # ── Extrair RG (apenas para log de debug parcial) ──
+    rg = ""
     rg_match = RG_PATTERN.search(full_text)
-    if not rg_match:
-        raise ExtractionError("RG não encontrado no documento")
-    rg = rg_match.group(1)
+    if rg_match:
+        rg = rg_match.group(1)
 
     # ── Extrair Curso ──
     curso = ""
@@ -156,14 +165,16 @@ def extract_data_from_pdf(pdf_bytes: bytes) -> DocumentData:
     is_eligible = _check_eligibility(full_text, settings)
 
     logger.info(
-        "Dados extraídos — RG: %s...%s, Curso: %s, Elegível: %s",
-        rg[:4],
-        rg[-2:],
+        "Dados extraídos — NUSP: %s..., RG: %s...%s, Curso: %s, Elegível: %s",
+        nusp[:3],
+        rg[:4] if rg else "N/A",
+        rg[-2:] if rg else "",
         curso,
         is_eligible,
     )
 
     return DocumentData(
+        nusp=nusp,
         rg=rg,
         curso=curso,
         unidade=unidade,

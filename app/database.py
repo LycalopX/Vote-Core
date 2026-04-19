@@ -2,18 +2,17 @@
 Banco de dados SQLite async com SQLAlchemy.
 
 Funções CRUD para as duas tabelas isoladas:
-- voter_hashes: deduplicação (hash HMAC existe? → voto duplo)
-- votes: registro anônimo (UUID + voto)
+  - voter_hashes: deduplicação — HMAC(NUSP, SALT_KEY)
+  - votes: registro anônimo — uuid + audit_id + vote (sem timestamp)
 """
 
 import uuid
-from collections import Counter
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import select, func
+from sqlalchemy import select, func, event
 
-from app.models import Base, VoterHash, Vote
+from app.models import Base, VoterHash, Vote, PublicVote
 from app.config import get_settings
 
 
@@ -32,6 +31,15 @@ def _get_engine():
             echo=settings.DEBUG,
             pool_pre_ping=True,
         )
+
+        @event.listens_for(_engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA cache_size=-64000")
+            cursor.close()
+
     return _engine
 
 
@@ -80,7 +88,7 @@ async def get_session():
 
 async def check_if_voted(voter_hash: str) -> bool:
     """
-    Verifica se o hash do eleitor já existe na tabela de deduplicação.
+    Verifica se o hash do NUSP já existe na tabela de deduplicação.
 
     Args:
         voter_hash: HMAC-SHA256 hex string (64 chars)
@@ -97,28 +105,22 @@ async def check_if_voted(voter_hash: str) -> bool:
 
 async def register_voter_hash(voter_hash: str) -> bool:
     """
-    Registra o hash do eleitor na tabela de deduplicação.
+    Registra o hash do NUSP na tabela de deduplicação (atômico).
 
     Args:
         voter_hash: HMAC-SHA256 hex string (64 chars)
 
     Returns:
-        True se registrado com sucesso, False se já existia
-
-    Note:
-        Usa INSERT direto com try/except no IntegrityError da UNIQUE constraint.
-        Isso elimina a race condition TOCTOU que existia no SELECT+INSERT anterior:
-        dois requests simultâneos não conseguem mais ambos passar no check.
+        True se registrado com sucesso, False se já existia (voto duplo)
     """
     from sqlalchemy.exc import IntegrityError
 
     async with get_session() as session:
         try:
             session.add(VoterHash(hash=voter_hash))
-            await session.flush()  # Força o INSERT antes do commit
+            await session.flush()
             return True
         except IntegrityError:
-            # UNIQUE constraint violada — hash já existe (voto duplo)
             await session.rollback()
             return False
 
@@ -126,25 +128,31 @@ async def register_voter_hash(voter_hash: str) -> bool:
 # ─── Operações da Tabela 2: votes ────────────────────────────────
 
 
-async def insert_vote(vote_choice: str) -> str:
+async def insert_vote(vote_choice: str, audit_id: str) -> str:
     """
-    Registra um voto anônimo e retorna o UUID de auditoria.
+    Registra um voto anônimo nas Tabelas 2 e 3 atomicamente.
+
+    Tabela 2 (votes): uuid + audit_id + vote  (restrita)
+    Tabela 3 (public_votes): uuid + vote  (pública, sem audit_id)
 
     Args:
         vote_choice: Opção escolhida ('Sim', 'Não', ou 'Nulo')
+        audit_id: HMAC(NUSP + senha, SALT_2)
 
     Returns:
-        UUID v4 string — o recibo de auditoria do eleitor
+        UUID v4 string — o recibo público do eleitor
     """
     vote_uuid = str(uuid.uuid4())
     async with get_session() as session:
-        session.add(Vote(uuid=vote_uuid, vote=vote_choice))
+        # Inserir nas duas tabelas na mesma transação
+        session.add(Vote(uuid=vote_uuid, audit_id=audit_id, vote=vote_choice))
+        session.add(PublicVote(uuid=vote_uuid, vote=vote_choice))
     return vote_uuid
 
 
 async def get_vote_by_uuid(vote_uuid: str) -> Vote | None:
     """
-    Busca um voto pelo UUID de auditoria.
+    Busca um voto pelo UUID público de auditoria.
 
     Args:
         vote_uuid: UUID v4 string
@@ -159,16 +167,33 @@ async def get_vote_by_uuid(vote_uuid: str) -> Vote | None:
         return result.scalar_one_or_none()
 
 
+async def get_vote_by_audit_id(audit_id: str) -> Vote | None:
+    """
+    Busca um voto pelo audit_id — para auditoria pessoal via NUSP + senha.
+
+    Args:
+        audit_id: HMAC(NUSP + senha, SALT_2) recalculado pelo eleitor
+
+    Returns:
+        Objeto Vote ou None se não encontrado
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            select(Vote).where(Vote.audit_id == audit_id)
+        )
+        return result.scalar_one_or_none()
+
+
 async def get_vote_counts() -> dict[str, int]:
     """
-    Retorna a contagem de votos por opção.
+    Retorna a contagem de votos por opção (da Tabela 3 pública).
 
     Returns:
         Dict ex: {'Sim': 150, 'Não': 87, 'Nulo': 12}
     """
     async with get_session() as session:
         result = await session.execute(
-            select(Vote.vote, func.count(Vote.id)).group_by(Vote.vote)
+            select(PublicVote.vote, func.count(PublicVote.id)).group_by(PublicVote.vote)
         )
         counts = {row[0]: row[1] for row in result.all()}
 
@@ -182,7 +207,19 @@ async def get_vote_counts() -> dict[str, int]:
 
 
 async def get_total_votes() -> int:
-    """Retorna o total de votos registrados."""
+    """Retorna o total de votos registrados (da Tabela 3 pública)."""
     async with get_session() as session:
-        result = await session.execute(select(func.count(Vote.id)))
+        result = await session.execute(select(func.count(PublicVote.id)))
         return result.scalar_one()
+
+
+async def get_all_public_votes() -> list[PublicVote]:
+    """
+    Retorna todos os votos da Tabela 3 pública (uuid + vote).
+    Sem audit_id, sem timestamp — seguros para exposição total.
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            select(PublicVote).order_by(PublicVote.id)
+        )
+        return list(result.scalars().all())

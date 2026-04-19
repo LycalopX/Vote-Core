@@ -1,65 +1,75 @@
 """
-Módulo de criptografia para deduplicação de votos.
+Módulo de criptografia para deduplicação e auditoria de votos.
 
-Gera HMAC-SHA256 irreversível a partir do RG do eleitor + SALT_KEY secreta.
-O hash resultante é a única coisa armazenada — o RG bruto nunca toca o disco.
+Dois hashes distintos, com duas SALTs distintas:
+  - id_voto    = HMAC(NUSP, SALT_KEY)          → deduplicação (Tabela 1)
+  - audit_id   = HMAC(NUSP + senha, SALT_2)    → auditoria pessoal (Tabela 2)
+
+Nenhum dado bruto do eleitor toca o disco — apenas os hashes gerados aqui.
 """
 
 import hmac
 import hashlib
-import re
 
 
-def normalize_rg(rg: str) -> str:
+def generate_voter_hash(nusp: str, salt_key: str) -> str:
     """
-    Normaliza o RG removendo pontos, traços e espaços.
-
-    '13.560.200-9' → '135602009'
-    '13560200-9'   → '135602009'
-    '13 560 200 9' → '135602009'
-    """
-    return re.sub(r"[.\-\s]", "", rg.strip())
-
-
-def generate_voter_hash(rg: str, salt_key: str) -> str:
-    """
-    Gera HMAC-SHA256 irreversível do RG + salt.
+    Gera HMAC-SHA256 irreversível do NUSP + salt para deduplicação.
 
     Args:
-        rg: RG bruto extraído do atestado (ex: '13.560.200-9')
-        salt_key: Chave secreta compartilhada (do .env SALT_KEY)
+        nusp: Número USP do eleitor (7–8 dígitos, extraído do atestado)
+        salt_key: Chave secreta SALT_KEY do .env
 
     Returns:
         Hash hexadecimal de 64 caracteres (256 bits)
-
-    Exemplo:
-        >>> generate_voter_hash('13.560.200-9', 'minha-chave')
-        'a1b2c3d4...'  # 64 chars hex
     """
-    rg_normalized = normalize_rg(rg)
+    nusp_clean = nusp.strip()
 
-    if not rg_normalized:
-        raise ValueError("RG não pode ser vazio após normalização")
+    if not nusp_clean:
+        raise ValueError("NUSP não pode ser vazio")
 
     return hmac.new(
         key=salt_key.encode("utf-8"),
-        msg=rg_normalized.encode("utf-8"),
+        msg=nusp_clean.encode("utf-8"),
         digestmod=hashlib.sha256,
     ).hexdigest()
 
 
-def verify_hash_match(rg: str, salt_key: str, stored_hash: str) -> bool:
+def generate_audit_id(nusp: str, password: str, salt_2: str) -> str:
     """
-    Verifica se um RG corresponde a um hash armazenado.
-    Usa comparação timing-safe para prevenir timing attacks.
+    Gera HMAC-SHA256 do NUSP concatenado com a senha pessoal do eleitor.
+
+    Permite auditoria pessoal: o eleitor pode verificar seu próprio voto
+    informando NUSP + senha, sem expor nenhum dado ao servidor além do hash.
 
     Args:
-        rg: RG bruto a verificar
+        nusp: Número USP do eleitor
+        password: Senha pessoal criada pelo eleitor na hora de votar
+        salt_2: Chave secreta SALT_2 do .env (separada de SALT_KEY)
+
+    Returns:
+        Hash hexadecimal de 64 caracteres — armazenado na Tabela 2
+    """
+    msg = (nusp.strip() + password).encode("utf-8")
+
+    return hmac.new(
+        key=salt_2.encode("utf-8"),
+        msg=msg,
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+
+
+def verify_voter_hash(nusp: str, salt_key: str, stored_hash: str) -> bool:
+    """
+    Verifica se um NUSP corresponde a um hash armazenado (timing-safe).
+
+    Args:
+        nusp: NUSP bruto a verificar
         salt_key: Chave secreta SALT_KEY
         stored_hash: Hash armazenado na Tabela 1
 
     Returns:
-        True se o RG corresponde ao hash
+        True se o NUSP corresponde ao hash
     """
-    computed = generate_voter_hash(rg, salt_key)
+    computed = generate_voter_hash(nusp, salt_key)
     return hmac.compare_digest(computed, stored_hash)

@@ -32,6 +32,45 @@
             Total: <strong>{{ total }}</strong> voto{{ 's' if total != 1 else '' }}
         </div>
 
+        <div class="divider"></div>
+
+        <!-- Tabela de Transparência Pública -->
+        <h2 class="section-title">📋 Registro Público de Votos</h2>
+        <p class="transparency-hint">
+            Cada voto registrado possui um UUID único. Confira o seu usando o recibo que recebeu ao votar.
+        </p>
+
+        {% if public_votes %}
+        <div class="votes-table-wrapper">
+            <table class="votes-table">
+                <thead>
+                    <tr>
+                        <th class="col-num">#</th>
+                        <th class="col-uuid">UUID</th>
+                        <th class="col-vote">Voto</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pv in public_votes %}
+                    <tr>
+                        <td class="col-num">{{ loop.index }}</td>
+                        <td class="col-uuid"><code>{{ pv.uuid }}</code></td>
+                        <td class="col-vote">
+                            <span class="vote-chip {% if pv.vote == 'Sim' %}chip-yes{% elif pv.vote == 'Não' %}chip-no{% else %}chip-null{% endif %}">
+                                {{ pv.vote }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>Nenhum voto registrado ainda.</p>
+        </div>
+        {% endif %}
+
         <div class="card-actions">
             <a href="/" class="btn btn-ghost">Voltar ao Início</a>
         </div>
