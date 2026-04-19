@@ -409,15 +409,27 @@ async def _wait_for_result(page: Page, captured_pdf: list) -> bytes:
             # Se não foi interceptado via response, tentar via download link
             download_link = page.locator("a[download*='documento']")
             if await download_link.count() > 0:
-                # Interceptar o download
+                # Interceptar o download e ler direto para memória
                 async with page.expect_download() as download_info:
                     await download_link.click()
                 download = await download_info.value
-                # Ler o download para memória
-                path = await download.path()
-                if path:
-                    with open(path, "rb") as f:
-                        return f.read()
+                # Playwright armazena downloads num temp dir gerenciado pelo
+                # browser context — é limpo automaticamente no browser.close().
+                # Lemos os bytes imediatamente e retornamos em memória.
+                import tempfile, os
+                tmp_path = os.path.join(tempfile.mkdtemp(), "doc.pdf")
+                try:
+                    await download.save_as(tmp_path)
+                    with open(tmp_path, "rb") as f:
+                        pdf_bytes = f.read()
+                    return pdf_bytes
+                finally:
+                    # Garantir que o arquivo temporário é removido
+                    try:
+                        os.unlink(tmp_path)
+                        os.rmdir(os.path.dirname(tmp_path))
+                    except OSError:
+                        pass
 
             # Último recurso: esperar mais um pouco pelo interceptor
             await page.wait_for_timeout(3000)

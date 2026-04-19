@@ -106,21 +106,21 @@ async def register_voter_hash(voter_hash: str) -> bool:
         True se registrado com sucesso, False se já existia
 
     Note:
-        Esta operação é atômica — se dois requests tentarem
-        registrar o mesmo hash simultaneamente, apenas um terá sucesso
-        (UNIQUE constraint no banco).
+        Usa INSERT direto com try/except no IntegrityError da UNIQUE constraint.
+        Isso elimina a race condition TOCTOU que existia no SELECT+INSERT anterior:
+        dois requests simultâneos não conseguem mais ambos passar no check.
     """
-    async with get_session() as session:
-        # Verifica primeiro para dar feedback melhor
-        existing = await session.execute(
-            select(VoterHash).where(VoterHash.hash == voter_hash)
-        )
-        if existing.scalar_one_or_none() is not None:
-            return False
+    from sqlalchemy.exc import IntegrityError
 
-        session.add(VoterHash(hash=voter_hash))
-        # O commit do context manager garante atomicidade
-        return True
+    async with get_session() as session:
+        try:
+            session.add(VoterHash(hash=voter_hash))
+            await session.flush()  # Força o INSERT antes do commit
+            return True
+        except IntegrityError:
+            # UNIQUE constraint violada — hash já existe (voto duplo)
+            await session.rollback()
+            return False
 
 
 # ─── Operações da Tabela 2: votes ────────────────────────────────

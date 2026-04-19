@@ -199,7 +199,6 @@ Vote-Core/
 
 - **Alex** — Core & Validação (scraper, cripto, backend)
 - **Paiva** — Banco de Dados & Infraestrutura
-- **Gabriel Yamauti** — Articulação Política
 
 ## 📜 Licença
 
