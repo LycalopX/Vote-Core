@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "vote-core",
       script: ".venv/bin/uvicorn",
-      args: "app.main:app --host 0.0.0.0 --port 2029",
+      args: "app.main:app --host 0.0.0.0 --port 2029 --proxy-headers --forwarded-allow-ips=*",
       cwd: "/home/lycalopx/repos/Vote-Core",
       interpreter: "none",
       autorestart: true,
