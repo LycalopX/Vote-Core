@@ -31,6 +31,9 @@ data/*
 .gemini/
 Agent.md
 
+# PM2 logs
+logs/
+
 # Playwright
 playwright-report/
 test-results/
