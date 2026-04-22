@@ -646,6 +646,18 @@ async def results_page(request: Request):
         },
     )
 
+@app.get("/guide", response_class=HTMLResponse)
+async def guide_page(request: Request):
+    user = get_current_user(request)
+
+    return templates.TemplateResponse(
+        request,
+        "guide.html",
+        {
+            "user": user,
+            "settings": settings,
+        },
+    )
 
 # ─── Health Check ────────────────────────────────────────────────
 
