@@ -44,12 +44,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Semaphore para limitar concorrência do Scraper ──────────────
-MAX_CONCURRENT_SCRAPERS = 4
+# Com httpx (sem Playwright/Chromium), cada request é uma chamada HTTP leve.
+# 50 concurrent é seguro para o servidor da USP e o MP60.
+MAX_CONCURRENT_SCRAPERS = 50
 scraper_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SCRAPERS)
 
 # ─── Rate Limiter por IP (proteção anti-spam no /validate) ──────
 RATE_LIMIT_MAX_ATTEMPTS = 5       # máximo de tentativas por janela
 RATE_LIMIT_WINDOW_SECONDS = 120   # janela de 2 minutos
+
+# Rate limiter para /audit (anti-brute-force de NUSP+senha)
+AUDIT_RATE_LIMIT_MAX = 5          # máximo de tentativas por janela
+AUDIT_RATE_LIMIT_WINDOW = 60      # janela de 1 minuto
+
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 
 
@@ -59,14 +66,45 @@ def _check_rate_limit(ip: str) -> bool:
     Retorna False se excedeu (deve ser bloqueado).
     """
     now = time.monotonic()
-    # Limpar entradas expiradas
-    _rate_limit_store[ip] = [
+    valid_times = [
         t for t in _rate_limit_store[ip]
         if now - t < RATE_LIMIT_WINDOW_SECONDS
     ]
-    if len(_rate_limit_store[ip]) >= RATE_LIMIT_MAX_ATTEMPTS:
+    if not valid_times:
+        del _rate_limit_store[ip]   # limpa chave fantasma da memória
+    else:
+        _rate_limit_store[ip] = valid_times
+
+    if len(valid_times) >= RATE_LIMIT_MAX_ATTEMPTS:
         return False
     _rate_limit_store[ip].append(now)
+    return True
+
+
+def _check_audit_rate_limit(nusp: str) -> bool:
+    """
+    Rate limiter para /audit — previne brute-force de NUSP+senha.
+
+    A chave é o NUSP (não o IP) porque em rede universitária (eduroam)
+    centenas de alunos compartilham o mesmo IP público via NAT.
+    Rate limit por IP bloquearia o campus inteiro após 5 tentativas.
+    Limitar por NUSP protege o recurso-alvo (anonimato de um aluno
+    específico) sem bloqueio colateral.
+    """
+    key = f"audit:{nusp.strip()}"
+    now = time.monotonic()
+    valid_times = [
+        t for t in _rate_limit_store[key]
+        if now - t < AUDIT_RATE_LIMIT_WINDOW
+    ]
+    if not valid_times:
+        del _rate_limit_store[key]   # limpa chave fantasma da memória
+    else:
+        _rate_limit_store[key] = valid_times
+
+    if len(valid_times) >= AUDIT_RATE_LIMIT_MAX:
+        return False
+    _rate_limit_store[key].append(now)
     return True
 
 
@@ -106,6 +144,47 @@ app.add_middleware(
     same_site="lax",
     https_only=not settings.DEBUG,
 )
+
+
+# ─── Security Headers Middleware ─────────────────────────────────
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """
+    Adiciona cabeçalhos de segurança a todas as respostas HTTP.
+
+    - X-Content-Type-Options: impede MIME-type sniffing
+    - X-Frame-Options: impede clickjacking via iframe
+    - Referrer-Policy: evita vazar URLs em referrers
+    - Content-Security-Policy: restringe fontes de scripts/estilos
+    - Strict-Transport-Security: força HTTPS no browser
+    - X-XSS-Protection: ativa filtro XSS (legado, mas não custa)
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+
+    # CSP: permite Google Fonts + inline styles (Jinja2 templates)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'"
+    )
+
+    # HSTS apenas em produção (1 ano)
+    if not settings.DEBUG:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+
+    return response
 
 # Static files e templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -159,6 +238,9 @@ async def landing_page(request: Request):
             "user": user,
             "error": error_messages.get(error, ""),
             "settings": settings,
+            "eligible_courses": settings.ELIGIBLE_COURSE_CODES if settings.ELIGIBLE_COURSE_CODES.strip() else None,
+            "eligible_units": settings.ELIGIBLE_UNIT_CODES if settings.ELIGIBLE_UNIT_CODES.strip() else None,
+            "eligible_keywords": settings.ELIGIBLE_KEYWORDS if settings.ELIGIBLE_KEYWORDS.strip() else None,
         },
     )
 
@@ -213,7 +295,7 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
             )
 
         # ── Fase B: Validação Volátil com limite de concorrência ──
-        logger.info("Validando documento para %s (IP: %s)", user.get("email", "?"), client_ip)
+        logger.info("Validando documento (IP: %s)", client_ip)
         try:
             async with asyncio.timeout(60):
                 async with scraper_semaphore:
@@ -231,8 +313,13 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
             )
 
         if not doc_data.is_eligible:
+            logger.warning(
+                "Eleitor não elegível — curso: %s (%s)",
+                doc_data.curso, doc_data.course_code or "?",
+            )
             error = (
-                f"Seu curso ({doc_data.curso or 'não identificado'}) "
+                f"Seu curso ({doc_data.curso or 'não identificado'}, "
+                f"código {doc_data.course_code or '?'}) "
                 "não está na lista de elegíveis para esta votação."
             )
             return templates.TemplateResponse(
@@ -449,6 +536,22 @@ async def audit_submit(
             "audit.html",
             {"user": user, "settings": settings,
              "result": None, "error": "Preencha o Número USP e a senha."},
+        )
+
+    # ── Rate limit por NUSP (anti-brute-force) ──
+    # Chave é o NUSP, não o IP, porque na rede eduroam da USP
+    # centenas de alunos compartilham o mesmo IP via NAT.
+    if not _check_audit_rate_limit(nusp_clean):
+        logger.warning("Rate limit de auditoria excedido")
+        return templates.TemplateResponse(
+            request,
+            "audit.html",
+            {"user": user, "settings": settings,
+             "result": None, "my_uuid": None, "public_votes": [],
+             "error": (
+                 f"Muitas tentativas para este NUSP. Aguarde {AUDIT_RATE_LIMIT_WINDOW} "
+                 "segundos e tente novamente."
+             )},
         )
 
     audit_id = generate_audit_id(nusp_clean, password_clean, settings.SALT_2)

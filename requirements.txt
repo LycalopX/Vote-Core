@@ -9,7 +9,6 @@ pydantic-settings>=2.7
 sqlalchemy>=2.0
 aiosqlite>=0.21
 pdfplumber>=0.11
-playwright>=1.49
 python-dotenv>=1.0
 
 # Testes

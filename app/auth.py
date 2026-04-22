@@ -99,7 +99,8 @@ async def callback(request: Request) -> RedirectResponse:
 
     # ── HARD CHECK: Validar domínio ──
     if not email.endswith(f"@{ALLOWED_DOMAIN}"):
-        logger.warning("Tentativa de login com email não-USP: %s", email)
+        masked_email = f"{email[:2]}***@{ALLOWED_DOMAIN}"
+        logger.warning("Tentativa de login com email não-USP: %s", masked_email)
         return RedirectResponse(url="/?error=domain_restricted", status_code=302)
 
     # ── Criar sessão ──
@@ -109,7 +110,8 @@ async def callback(request: Request) -> RedirectResponse:
         "authenticated": True,
     }
 
-    logger.info("Login bem-sucedido: %s", email)
+    masked_email = f"{email[:2]}***@{ALLOWED_DOMAIN}"
+    logger.info("Login bem-sucedido: %s", masked_email)
     return RedirectResponse(url="/validate", status_code=302)
 
 

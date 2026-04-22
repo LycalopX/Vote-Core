@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 
 from app.crypto import generate_voter_hash, generate_audit_id, verify_voter_hash
+from sqlalchemy import text
 from app.database import (
     init_db, close_db,
     check_if_voted, register_voter_hash,
@@ -232,3 +233,239 @@ def test_vote_model_sem_created_at():
         "Timestamp na Tabela 2 cria vetor de correlação com a Tabela 1."
     )
     assert "audit_id" in columns, "Vote deve ter campo audit_id"
+
+
+# ─── Model: WITHOUT ROWID — sem rowid implícito ─────────────────
+
+from app.models import VoterHash, PublicVote
+
+
+def test_without_rowid_voter_hashes():
+    """Tabela 1 (voter_hashes) deve usar WITHOUT ROWID — sem rowid implícito."""
+    info = VoterHash.__table__.dialect_options.get("sqlite", {})
+    assert info.get("with_rowid") is False, (
+        "voter_hashes DEVE usar WITHOUT ROWID! "
+        "O rowid implícito permite correlação sequencial entre tabelas."
+    )
+    # PK deve ser 'hash' (texto), não 'id' (inteiro)
+    pk_cols = [c.name for c in VoterHash.__table__.primary_key.columns]
+    assert pk_cols == ["hash"], f"PK deve ser ['hash'], obteve {pk_cols}"
+    columns = {c.name for c in VoterHash.__table__.columns}
+    assert "id" not in columns, "voter_hashes NÃO deve ter coluna 'id' inteira"
+
+
+def test_without_rowid_votes():
+    """Tabela 2 (votes) deve usar WITHOUT ROWID — sem rowid implícito."""
+    info = Vote.__table__.dialect_options.get("sqlite", {})
+    assert info.get("with_rowid") is False, (
+        "votes DEVE usar WITHOUT ROWID! "
+        "O rowid implícito permite correlação sequencial entre tabelas."
+    )
+    pk_cols = [c.name for c in Vote.__table__.primary_key.columns]
+    assert pk_cols == ["uuid"], f"PK deve ser ['uuid'], obteve {pk_cols}"
+    columns = {c.name for c in Vote.__table__.columns}
+    assert "id" not in columns, "votes NÃO deve ter coluna 'id' inteira"
+
+
+def test_without_rowid_public_votes():
+    """Tabela 3 (public_votes) deve usar WITHOUT ROWID — sem rowid implícito."""
+    info = PublicVote.__table__.dialect_options.get("sqlite", {})
+    assert info.get("with_rowid") is False, (
+        "public_votes DEVE usar WITHOUT ROWID! "
+        "O rowid implícito permite correlação sequencial entre tabelas."
+    )
+    pk_cols = [c.name for c in PublicVote.__table__.primary_key.columns]
+    assert pk_cols == ["uuid"], f"PK deve ser ['uuid'], obteve {pk_cols}"
+    columns = {c.name for c in PublicVote.__table__.columns}
+    assert "id" not in columns, "public_votes NÃO deve ter coluna 'id' inteira"
+
+
+# ─── Model: public_votes não expõe audit_id ──────────────────────
+
+
+def test_public_votes_sem_audit_id():
+    """Tabela 3 NÃO deve conter audit_id — defesa em profundidade."""
+    columns = {c.name for c in PublicVote.__table__.columns}
+    assert "audit_id" not in columns, (
+        "public_votes NÃO deve ter audit_id! "
+        "A Tabela 3 é exposta publicamente e audit_id deve existir apenas na Tabela 2."
+    )
+
+
+def test_votes_tem_audit_id():
+    """Tabela 2 DEVE conter audit_id para auditoria pessoal."""
+    columns = {c.name for c in Vote.__table__.columns}
+    assert "audit_id" in columns
+
+
+# ─── Scraper: DocumentData não contém RG ─────────────────────────
+
+from app.scraper import DocumentData, COURSE_CODE_PATTERN, _check_eligibility
+
+
+def test_document_data_sem_campo_rg():
+    """DocumentData NÃO deve ter campo 'rg' — dado pessoal removido."""
+    fields = {f.name for f in DocumentData.__dataclass_fields__.values()}
+    assert "rg" not in fields, "DocumentData NÃO deve ter campo 'rg'"
+
+
+def test_document_data_tem_course_code():
+    """DocumentData deve ter campo 'course_code' para filtro de elegibilidade."""
+    fields = {f.name for f in DocumentData.__dataclass_fields__.values()}
+    assert "course_code" in fields
+
+
+def test_document_data_campos_obrigatorios():
+    """DocumentData deve ter todos os campos esperados."""
+    fields = {f.name for f in DocumentData.__dataclass_fields__.values()}
+    expected = {"nusp", "curso", "course_code", "unidade", "nome", "is_eligible"}
+    assert fields == expected, f"Campos: {fields}, esperado: {expected}"
+
+
+# ─── Scraper: COURSE_CODE_PATTERN ────────────────────────────────
+
+import re
+
+
+def test_course_code_pattern_extrai_codigo():
+    """Regex deve extrair código de curso do formato 'Curso: 97001 - Nome'."""
+    text = "Curso: 97001 - Engenharia de Computação"
+    match = COURSE_CODE_PATTERN.search(text)
+    assert match is not None
+    assert match.group(1) == "97001"
+
+
+def test_course_code_pattern_ignora_texto_sem_codigo():
+    """Regex não deve dar match em texto sem padrão de curso."""
+    text = "Este é um texto qualquer sem código de curso"
+    match = COURSE_CODE_PATTERN.search(text)
+    assert match is None
+
+
+# ─── Scraper: _check_eligibility ─────────────────────────────────
+
+
+class FakeSettings:
+    """Mock de Settings para testes de elegibilidade."""
+    def __init__(self, units="", courses="", keywords=""):
+        self.eligible_unit_codes_list = [c.strip() for c in units.split(",") if c.strip()] if units else []
+        self.eligible_course_codes_list = [c.strip() for c in courses.split(",") if c.strip()] if courses else []
+        self.eligible_keywords_list = [k.strip() for k in keywords.split("|") if k.strip()] if keywords else []
+
+
+SAMPLE_PDF_TEXT = (
+    "Unidade: 97 - Escola de Engenharia de São Carlos e Instituto de Ciências "
+    "Matemáticas e de Computação\n"
+    "Curso: 97001 - Engenharia de Computação\n"
+)
+
+
+def test_eligibility_sem_filtros_aceita_todos():
+    """Sem nenhum filtro configurado, qualquer aluno é elegível."""
+    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings()) is True
+
+
+def test_eligibility_unit_match():
+    """Unidade 97 deve dar match."""
+    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(units="97")) is True
+
+
+def test_eligibility_unit_no_match():
+    """Unidade 55 NÃO deve dar match."""
+    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(units="55")) is False
+
+
+def test_eligibility_course_match():
+    """Curso 97001 deve dar match."""
+    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(courses="97001")) is True
+
+
+def test_eligibility_course_no_match():
+    """Curso 97002 NÃO deve dar match (curso diferente)."""
+    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(courses="97002")) is False
+
+
+def test_eligibility_course_prioridade_sobre_unidade():
+    """Se ELIGIBLE_COURSE_CODES definido, unidade é IGNORADA."""
+    # Curso errado + unidade certa = NÃO elegível (curso tem prioridade)
+    assert _check_eligibility(
+        SAMPLE_PDF_TEXT, FakeSettings(units="97", courses="97002")
+    ) is False
+
+
+def test_eligibility_course_lista_com_match():
+    """Lista de cursos com pelo menos um match deve aceitar."""
+    assert _check_eligibility(
+        SAMPLE_PDF_TEXT, FakeSettings(courses="97002,97001")
+    ) is True
+
+
+def test_eligibility_keyword_match():
+    """Keyword presente no texto deve dar match."""
+    assert _check_eligibility(
+        SAMPLE_PDF_TEXT, FakeSettings(keywords="Engenharia de Computação")
+    ) is True
+
+
+def test_eligibility_keyword_no_match():
+    """Keyword 'EESC' NÃO aparece no PDF do Júpiter."""
+    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(keywords="EESC")) is False
+
+
+# ─── Config: propriedades computadas ─────────────────────────────
+
+from app.config import Settings
+
+
+def test_config_eligible_course_codes_list_vazio():
+    """ELIGIBLE_COURSE_CODES vazio retorna lista vazia."""
+    s = Settings(
+        SECRET_KEY="x", SALT_KEY="y", SALT_2="z",
+        ELIGIBLE_COURSE_CODES="", _env_file=None,
+    )
+    assert s.eligible_course_codes_list == []
+
+
+def test_config_eligible_course_codes_list_com_valores():
+    """ELIGIBLE_COURSE_CODES com valores retorna lista correta."""
+    s = Settings(
+        SECRET_KEY="x", SALT_KEY="y", SALT_2="z",
+        ELIGIBLE_COURSE_CODES="97001,97002", _env_file=None,
+    )
+    assert s.eligible_course_codes_list == ["97001", "97002"]
+
+
+# ─── Database: pragmas SQLite ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pragma_busy_timeout():
+    """Engine do app deve configurar busy_timeout >= 15000ms."""
+    from app.database import _get_engine
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(text("PRAGMA busy_timeout"))
+        timeout = result.scalar()
+        assert timeout >= 15000, f"busy_timeout deve ser >= 15000, obteve {timeout}"
+
+
+@pytest.mark.asyncio
+async def test_pragma_journal_mode_wal():
+    """Engine do app deve usar journal_mode=WAL."""
+    from app.database import _get_engine
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(text("PRAGMA journal_mode"))
+        mode = result.scalar()
+        assert mode == "wal", f"journal_mode deve ser 'wal', obteve '{mode}'"
+
+
+@pytest.mark.asyncio
+async def test_pragma_wal_autocheckpoint():
+    """Engine do app deve ter wal_autocheckpoint configurado."""
+    from app.database import _get_engine
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(text("PRAGMA wal_autocheckpoint"))
+        cp = result.scalar()
+        assert cp == 1000, f"wal_autocheckpoint deve ser 1000, obteve {cp}"

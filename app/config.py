@@ -33,8 +33,14 @@ class Settings(BaseSettings):
     VOTE_OPTIONS: str = "Sim,Não,Nulo"
 
     # Códigos de unidade USP elegíveis (separados por vírgula)
-    # 97 = Escola de Engenharia de São Carlos
+    # 97 = Escola de Engenharia de São Carlos + ICMC
     ELIGIBLE_UNIT_CODES: str = "97"
+
+    # Códigos de curso USP elegíveis (separados por vírgula)
+    # Filtro mais fino que unidade — EESC e ICMC compartilham unidade 97
+    # Deixe vazio para aceitar qualquer curso da unidade elegível
+    # Ex: 97001 = Eng. Computação, 97002 = Eng. Elétrica/Eletrônica, etc.
+    ELIGIBLE_COURSE_CODES: str = ""
 
     # Keywords para busca no texto do atestado (separadas por |)
     ELIGIBLE_KEYWORDS: str = "Escola de Engenharia de São Carlos|EESC"
@@ -52,6 +58,13 @@ class Settings(BaseSettings):
         if not self.ELIGIBLE_UNIT_CODES.strip():
             return []
         return [code.strip() for code in self.ELIGIBLE_UNIT_CODES.split(",")]
+
+    @property
+    def eligible_course_codes_list(self) -> list[str]:
+        """Retorna a lista de códigos de curso elegíveis."""
+        if not self.ELIGIBLE_COURSE_CODES.strip():
+            return []
+        return [code.strip() for code in self.ELIGIBLE_COURSE_CODES.split(",")]
 
     @property
     def eligible_keywords_list(self) -> list[str]:

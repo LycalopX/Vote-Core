@@ -7,10 +7,23 @@ A correlação entre "quem votou" e "qual voto" é matematicamente impossível.
 Tabela 1 — voter_hashes: id_voto (HMAC NUSP) + timestamp
 Tabela 2 — votes: uuid + audit_id + vote  (RESTRITA — contém audit_id)
 Tabela 3 — public_votes: uuid + vote  (PÚBLICA — sem audit_id, sem timestamp)
+
+TODAS as tabelas usam WITHOUT ROWID:
+  O SQLite, por padrão, atribui um rowid auto-incrementado a cada registro.
+  Esse rowid implícito funciona como um contador de inserções e é sequencial.
+  Se duas tabelas (ex: voter_hashes e votes) são preenchidas na mesma transação,
+  o rowid 42 na Tabela 1 e o rowid 42 na Tabela 2 correspondem ao mesmo voto
+  — DESTRUINDO o anonimato.
+
+  WITHOUT ROWID elimina esse rowid implícito. Cada tabela usa sua chave natural
+  (hash, uuid) como primary key direta, armazenada em B-Tree sem ordem de inserção.
+  Não há mais como correlacionar registros por posição sequencial.
+
+  Ref: https://www.sqlite.org/withoutrowid.html
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Index
+from sqlalchemy import Column, String, DateTime, Index
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -25,16 +38,18 @@ class VoterHash(Base):
     Armazena apenas o HMAC-SHA256 do NUSP do eleitor + o timestamp do voto.
     O timestamp fica SOMENTE aqui para evitar correlação com a Tabela 2.
     NÃO contém nenhum dado pessoal identificável.
+
+    WITHOUT ROWID: A coluna `hash` é a PK natural (B-Tree clustered).
+    Sem rowid implícito — impossível correlacionar com outras tabelas por posição.
     """
 
     __tablename__ = "voter_hashes"
+    __table_args__ = {"sqlite_with_rowid": False}
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
     hash = Column(
         String(64),
-        unique=True,
+        primary_key=True,
         nullable=False,
-        index=True,
         comment="HMAC-SHA256(NUSP, SALT_KEY) — 64 chars hex",
     )
     created_at = Column(
@@ -45,7 +60,7 @@ class VoterHash(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<VoterHash(id={self.id}, hash='{self.hash[:12]}...')>"
+        return f"<VoterHash(hash='{self.hash[:12]}...')>"
 
 
 class Vote(Base):
@@ -55,16 +70,19 @@ class Vote(Base):
     Armazena o voto com audit_id para auditoria pessoal.
     Esta tabela NUNCA é exposta publicamente.
     A Tabela 3 (public_votes) é a versão pública com apenas uuid + vote.
+
+    WITHOUT ROWID: A coluna `uuid` é a PK natural (B-Tree clustered).
+    Sem rowid implícito — a posição física do registro é determinada
+    pela ordenação do UUID (aleatório por natureza), não pela ordem de inserção.
     """
 
     __tablename__ = "votes"
+    __table_args__ = {"sqlite_with_rowid": False}
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
     uuid = Column(
         String(36),
-        unique=True,
+        primary_key=True,
         nullable=False,
-        index=True,
         comment="UUID v4 aleatório — recibo público de auditoria",
     )
     audit_id = Column(
@@ -96,16 +114,18 @@ class PublicVote(Base):
 
     Defesa em profundidade: mesmo com acesso direto ao banco,
     esta tabela não contém nenhum dado que permita correlação.
+
+    WITHOUT ROWID: A coluna `uuid` é a PK natural (B-Tree clustered).
+    Sem rowid implícito — posição física determinada pela ordenação do UUID.
     """
 
     __tablename__ = "public_votes"
+    __table_args__ = {"sqlite_with_rowid": False}
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
     uuid = Column(
         String(36),
-        unique=True,
+        primary_key=True,
         nullable=False,
-        index=True,
         comment="UUID v4 aleatório — mesmo da Tabela 2",
     )
     vote = Column(

@@ -50,7 +50,7 @@ def generate_audit_id(nusp: str, password: str, salt_2: str) -> str:
     Returns:
         Hash hexadecimal de 64 caracteres — armazenado na Tabela 2
     """
-    msg = (nusp.strip() + password).encode("utf-8")
+    msg = (nusp.strip() + "\x00" + password).encode("utf-8")
 
     return hmac.new(
         key=salt_2.encode("utf-8"),

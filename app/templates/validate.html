@@ -66,9 +66,10 @@
             <h3>🔒 O que acontece com seus dados?</h3>
             <ul>
                 <li>O código é usado <strong>apenas para consultar</strong> o portal da USP</li>
-                <li>Extraímos somente o <strong>curso</strong> (elegibilidade) e o <strong>RG</strong> (deduplicação)</li>
-                <li>O RG é convertido em um <strong>hash irreversível</strong> e descartado imediatamente</li>
-                <li><strong>Nenhum dado pessoal é armazenado</strong> — nem no servidor, nem no banco</li>
+                <li>Extraímos o <strong>Número USP</strong> (deduplicação) e o <strong>código de curso</strong> (elegibilidade)</li>
+                <li>O Número USP é convertido em um <strong>hash HMAC irreversível</strong> e descartado da memória imediatamente</li>
+                <li><strong>Nenhum dado pessoal é armazenado</strong> — nem no servidor, nem no banco, nem em logs</li>
+                <li>O PDF do atestado <strong>nunca é salvo em disco</strong> — existe apenas em memória durante a validação</li>
             </ul>
         </div>
     </div>

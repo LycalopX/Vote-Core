@@ -1,9 +1,15 @@
 """
 Banco de dados SQLite async com SQLAlchemy.
 
-Funções CRUD para as duas tabelas isoladas:
-  - voter_hashes: deduplicação — HMAC(NUSP, SALT_KEY)
-  - votes: registro anônimo — uuid + audit_id + vote (sem timestamp)
+Funções CRUD para as três tabelas isoladas (WITHOUT ROWID):
+  - voter_hashes: deduplicação — HMAC(NUSP, SALT_KEY)         [PK: hash]
+  - votes: registro anônimo — uuid + audit_id + vote           [PK: uuid]
+  - public_votes: transparência pública — uuid + vote          [PK: uuid]
+
+WITHOUT ROWID: Todas as tabelas usam chaves naturais como PK (hash, uuid)
+e não possuem rowid implícito. Isso impede correlação por posição sequencial
+entre tabelas — o rowid auto-incrementado do SQLite padrão permitiria
+que o registro #42 na Tabela 1 correspondesse ao registro #42 na Tabela 2.
 """
 
 import uuid
@@ -38,6 +44,11 @@ def _get_engine():
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.execute("PRAGMA cache_size=-64000")
+            # Timeout de 15s para escritas concorrentes — evita "database is locked"
+            # em picos de votação no hardware limitado (Blackview MP60)
+            cursor.execute("PRAGMA busy_timeout=15000")
+            # WAL auto-checkpoint a cada 1000 páginas (~4MB)
+            cursor.execute("PRAGMA wal_autocheckpoint=1000")
             cursor.close()
 
     return _engine
@@ -132,21 +143,16 @@ async def insert_vote(vote_choice: str, audit_id: str) -> str:
     """
     Registra um voto anônimo nas Tabelas 2 e 3 atomicamente.
 
-    Tabela 2 (votes): uuid + audit_id + vote  (restrita)
-    Tabela 3 (public_votes): uuid + vote  (pública, sem audit_id)
-
-    Args:
-        vote_choice: Opção escolhida ('Sim', 'Não', ou 'Nulo')
-        audit_id: HMAC(NUSP + senha, SALT_2)
-
-    Returns:
-        UUID v4 string — o recibo público do eleitor
+    A inserção é feita numa única transação SQLAlchemy.
+    Correlação por posição sequencial é impossível porque todas as tabelas
+    usam WITHOUT ROWID — a posição física no B-Tree é determinada pela PK
+    natural (UUID v4 aleatório), não pela ordem de inserção.
     """
     vote_uuid = str(uuid.uuid4())
     async with get_session() as session:
-        # Inserir nas duas tabelas na mesma transação
         session.add(Vote(uuid=vote_uuid, audit_id=audit_id, vote=vote_choice))
         session.add(PublicVote(uuid=vote_uuid, vote=vote_choice))
+
     return vote_uuid
 
 
@@ -193,7 +199,7 @@ async def get_vote_counts() -> dict[str, int]:
     """
     async with get_session() as session:
         result = await session.execute(
-            select(PublicVote.vote, func.count(PublicVote.id)).group_by(PublicVote.vote)
+            select(PublicVote.vote, func.count()).group_by(PublicVote.vote)
         )
         counts = {row[0]: row[1] for row in result.all()}
 
@@ -209,17 +215,21 @@ async def get_vote_counts() -> dict[str, int]:
 async def get_total_votes() -> int:
     """Retorna o total de votos registrados (da Tabela 3 pública)."""
     async with get_session() as session:
-        result = await session.execute(select(func.count(PublicVote.id)))
+        result = await session.execute(
+            select(func.count()).select_from(PublicVote)
+        )
         return result.scalar_one()
 
 
 async def get_all_public_votes() -> list[PublicVote]:
     """
     Retorna todos os votos da Tabela 3 pública (uuid + vote).
-    Sem audit_id, sem timestamp — seguros para exposição total.
+    Ordenados por UUID (aleatório por natureza).
+    Com WITHOUT ROWID, a ordem física já é por UUID (B-Tree clustered),
+    então esta query é eficiente — é um scan sequencial do B-Tree.
     """
     async with get_session() as session:
         result = await session.execute(
-            select(PublicVote).order_by(PublicVote.id)
+            select(PublicVote).order_by(PublicVote.uuid)
         )
         return list(result.scalars().all())

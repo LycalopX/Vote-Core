@@ -76,6 +76,8 @@ Antes de registrar o voto, o sistema verifica: **esse hash já existe no banco?*
 
 **A Tabela 3 (`public_votes`) é uma cópia física da Tabela 2, mas sem o campo `audit_id`.** A rota `/results` lê exclusivamente da Tabela 3. Mesmo em caso de SQL injection na rota pública, não existe `audit_id` para extrair — a separação é física, não lógica. Defesa em profundidade.
 
+**Todas as tabelas usam `WITHOUT ROWID`.** O SQLite atribui por padrão um `rowid` implícito auto-incrementado a cada registro — se duas tabelas são preenchidas na mesma transação, o `rowid 42` na Tabela 1 e o `rowid 42` na Tabela 2 correspondem ao mesmo eleitor. `WITHOUT ROWID` elimina esse rowid. Cada tabela usa sua **chave natural** como PK direta (`hash` na T1, `uuid` nas T2/T3), armazenada em B-Tree clustered pela chave — a posição física é determinada pelo valor (aleatório), não pela ordem de inserção.
+
 **Mesmo quem tem acesso total ao servidor e ao banco de dados não consegue descobrir quem votou o quê.** A separação é estrutural, não uma questão de permissão — é matematicamente impossível fazer o cruzamento.
 
 ### 5. Cada voto é verificável — Dupla Auditoria

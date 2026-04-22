@@ -1,9 +1,9 @@
 # Vote-Core — Documentação Técnica Completa
 
 > **Sistema de votação eletrônica anônima e auditável para a EESC-USP.**
-> Versão: 2.0 (Refatoração NUSP + 3 Tabelas)
-> Data: 19 de abril de 2026
-> Autores: Alex (LycalopX), com assistência de IA
+> Versão: 2.2 (Hardening: Security Headers + Rate Limiting + Elegibilidade por Curso)
+> Data: 21 de abril de 2026
+> Autores: Alex (LycalopX), Eduardo Paiva (EduardoAPaiva), com assistência de IA
 
 ---
 
@@ -77,8 +77,9 @@ O sistema usa **duas chaves HMAC independentes**:
    - Validação server-side no callback: `email.endswith("@usp.br")` — rejeita qualquer email fora do domínio mesmo que o parâmetro `hd` seja removido
 2. **Validação de matrícula** via scraper do sistema Júpiter da USP
    - O aluno fornece o código de controle do atestado de matrícula
-   - O scraper acessa o Júpiter, baixa o PDF, e extrai: NUSP, nome, curso, unidade
-   - A unidade é validada contra `ELIGIBLE_UNIT_CODES` (código 97 = EESC)
+   - O scraper acessa o Júpiter, baixa o PDF, e extrai: NUSP, nome, curso, código de curso, unidade
+   - Elegibilidade verificada em cascata: `ELIGIBLE_COURSE_CODES` → `ELIGIBLE_UNIT_CODES` → `ELIGIBLE_KEYWORDS`
+   - Nenhum dado pessoal (RG, nome completo) é extraído ou armazenado
 
 ---
 
@@ -87,36 +88,38 @@ O sistema usa **duas chaves HMAC independentes**:
 ### Diagrama
 
 ```
-┌─────────────────────────────────┐
-│  Tabela 1: voter_hashes         │
-│  (FECHADA — nunca exposta)      │
-│─────────────────────────────────│
-│  id         INTEGER PK AUTO     │
-│  hash       VARCHAR(64) UNIQUE  │  ← HMAC(NUSP, SALT_KEY)
-│  created_at DATETIME            │  ← ÚNICO timestamp do sistema
-└─────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  Tabela 1: voter_hashes                  │
+│  (FECHADA — nunca exposta)               │
+│  WITHOUT ROWID                           │
+│──────────────────────────────────────────│
+│  hash       VARCHAR(64) PRIMARY KEY      │  ← HMAC(NUSP, SALT_KEY)
+│  created_at DATETIME                     │  ← ÚNICO timestamp do sistema
+│  (sem rowid implícito!)                  │
+└──────────────────────────────────────────┘
          ⊘ ZERO relação ⊘
-┌─────────────────────────────────┐
-│  Tabela 2: votes                │
-│  (RESTRITA — nunca exposta)     │
-│─────────────────────────────────│
-│  id         INTEGER PK AUTO     │
-│  uuid       VARCHAR(36) UNIQUE  │  ← UUID v4 aleatório
-│  audit_id   VARCHAR(64) UNIQUE  │  ← HMAC(NUSP+senha, SALT_2)
-│  vote       VARCHAR(10)         │  ← "Sim" | "Não" | "Nulo"
-│  (sem created_at!)              │
-└─────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  Tabela 2: votes                         │
+│  (RESTRITA — nunca exposta)              │
+│  WITHOUT ROWID                           │
+│──────────────────────────────────────────│
+│  uuid       VARCHAR(36) PRIMARY KEY      │  ← UUID v4 aleatório
+│  audit_id   VARCHAR(64) UNIQUE           │  ← HMAC(NUSP+senha, SALT_2)
+│  vote       VARCHAR(10)                  │  ← "Sim" | "Não" | "Nulo"
+│  (sem created_at! sem rowid!)            │
+└──────────────────────────────────────────┘
          ⊘ ZERO relação ⊘
-┌─────────────────────────────────┐
-│  Tabela 3: public_votes        │
-│  (PÚBLICA — exposta em /results │
-│   e /audit após verificação)    │
-│─────────────────────────────────│
-│  id         INTEGER PK AUTO     │
-│  uuid       VARCHAR(36) UNIQUE  │  ← mesmo UUID da Tabela 2
-│  vote       VARCHAR(10)         │  ← "Sim" | "Não" | "Nulo"
-│  (sem audit_id! sem timestamp!) │
-└─────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  Tabela 3: public_votes                  │
+│  (PÚBLICA — exposta em /results          │
+│   e /audit após verificação)             │
+│  WITHOUT ROWID                           │
+│──────────────────────────────────────────│
+│  uuid       VARCHAR(36) PRIMARY KEY      │  ← mesmo UUID da Tabela 2
+│  vote       VARCHAR(10)                  │  ← "Sim" | "Não" | "Nulo"
+│  (sem audit_id! sem timestamp!           │
+│   sem rowid!)                            │
+└──────────────────────────────────────────┘
 ```
 
 ### 3.1 Por que 3 tabelas e não 2?
@@ -140,17 +143,47 @@ Removendo o timestamp da Tabela 2, essa correlação é impossível.
 
 Foreign keys criariam uma relação formal entre "quem votou" e "qual voto". Sem FKs, as tabelas são **matematicamente independentes** — não há join possível.
 
-### 3.4 SQLite WAL Mode
+### 3.4 Por que WITHOUT ROWID?
+
+O SQLite atribui por padrão um **`rowid` implícito auto-incrementado** a cada registro — um contador inteiro sequencial que reflete a ordem de inserção. Esse rowid é o vetor de ataque mais sutil contra o anonimato:
+
+**O ataque**: Se duas tabelas são preenchidas na mesma transação (registra hash → insere voto), o `rowid 42` na Tabela 1 e o `rowid 42` na Tabela 2 correspondem ao **mesmo eleitor** — destruindo completamente o anonimato.
+
+Este vetor foi identificado pelo Eduardo Paiva (Ref: `temp/reference2.md`, linhas 556-570):
+> *"Se os dados estão sendo salvos sequencialmente, os mesmos índices representam o mesmo voto"*
+
+**A solução**: `WITHOUT ROWID` elimina o rowid implícito. Cada tabela usa sua **chave natural** como PK direta:
+
+| Tabela | PK Natural | Formato |
+|---|---|---|
+| `voter_hashes` | `hash` | HMAC-SHA256 hex (64 chars) |
+| `votes` | `uuid` | UUID v4 aleatório (36 chars) |
+| `public_votes` | `uuid` | UUID v4 aleatório (36 chars) |
+
+Os dados são armazenados em **B-Tree clustered** pela PK natural. A posição física de um registro na B-Tree é determinada pelo valor da chave (hash ou UUID), não pela ordem de inserção. Como UUIDs são aleatórios e HMACs são pseudo-aleatórios, a posição física de cada registro é efetivamente aleatória.
+
+**Benefícios adicionais**:
+- **Performance**: Consultas por PK natural (WHERE hash=? / WHERE uuid=?) são O(log n) diretas no B-Tree, sem indireção via rowid.
+- **Espaço**: Economiza ~8 bytes por registro (tamanho do rowid) — marginal, mas limpo.
+- **Semântica**: As tabelas não possuem um campo que "não deveria existir" — a ausência do rowid é uma garantia estrutural, não uma questão de "não usar".
+
+Ref: [SQLite WITHOUT ROWID](https://www.sqlite.org/withoutrowid.html)
+
+### 3.5 SQLite WAL Mode e Pragmas
 
 ```sql
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 PRAGMA cache_size=-64000;
+PRAGMA busy_timeout=15000;
+PRAGMA wal_autocheckpoint=1000;
 ```
 
 - **WAL (Write-Ahead Logging)**: Permite múltiplos leitores simultâneos enquanto um writer opera. Crucial para a assembleia onde dezenas de pessoas acessam `/results` enquanto outros votam.
 - **synchronous=NORMAL**: Balanço entre performance e durabilidade. Em caso de queda de energia, no máximo a última transação pode ser perdida (aceitável — o eleitor veria um erro e poderia tentar novamente).
-- **cache_size=-64000**: 64MB de cache em memória para reduzir I/O no disco do Blackview MP60.
+- **cache_size=-64000**: 64MB de cache em memória para reduzir I/O.
+- **busy_timeout=15000**: Se o banco estiver bloqueado por outra escrita, a conexão espera até 15 segundos antes de retornar erro `database is locked`. Previne falhas durante picos de votação simultânea.
+- **wal_autocheckpoint=1000**: O WAL faz checkpoint automático a cada 1000 páginas (~4MB), evitando crescimento descontrolado do arquivo `-wal`.
 
 ---
 
@@ -218,7 +251,7 @@ Três funções puras, sem side-effects:
 
 `verify_voter_hash` usa `hmac.compare_digest()` para prevenir timing attacks.
 
-### 5.2 `app/scraper.py` (485 linhas)
+### 5.2 `app/scraper.py` (~500 linhas)
 
 Playwright-based scraper que:
 1. Abre uma instância headless de Chromium
@@ -226,9 +259,15 @@ Playwright-based scraper que:
 3. Baixa o PDF do atestado de matrícula
 4. Extrai dados via regex:
    - `NUSP_PATTERN`: `código\s+USP\s+(\d{7,8})` — dado primário
-   - `RG_PATTERN`: apenas para log de debug (parcial)
    - `CURSO_PATTERN`: nome do curso
+   - `COURSE_CODE_PATTERN`: código numérico (ex: 97001)
    - `UNIDADE_PATTERN`: código da unidade (97 = EESC)
+   - **RG não é extraído** — removido por ser dado pessoal desnecessário
+5. Verificação de elegibilidade em cascata:
+   - Se `ELIGIBLE_COURSE_CODES` definido → verifica código de curso (prioridade máxima)
+   - Senão, se `ELIGIBLE_UNIT_CODES` definido → verifica unidade
+   - Senão, se `ELIGIBLE_KEYWORDS` definido → busca texto no PDF
+   - Se nenhum filtro definido → aceita todos
 
 Concorrência limitada por `asyncio.Semaphore(4)` com `asyncio.timeout(60)`.
 
@@ -239,14 +278,15 @@ Google OAuth 2.0 com:
 - Validação hard no callback (rejeita `!email.endswith("@usp.br")`)
 - Modo dev sem OAuth quando `GOOGLE_CLIENT_ID` não está configurado
 
-### 5.4 `app/database.py` (226 linhas)
+### 5.4 `app/database.py` (~305 linhas)
 
 CRUD assíncrono para as 3 tabelas. Destaque:
 - `insert_vote()` insere nas Tabelas 2 e 3 **na mesma transação**
 - `get_vote_counts()` e `get_total_votes()` leem da **Tabela 3** (pública), não da Tabela 2
 - `get_vote_by_audit_id()` lê da **Tabela 2** (restrita) — única função que toca o audit_id
+- Pragmas configurados via listener `set_sqlite_pragma()`: WAL, busy_timeout=15s, autocheckpoint=1000
 
-### 5.5 `app/main.py` (461 linhas)
+### 5.5 `app/main.py` (~550 linhas)
 
 FastAPI app com as rotas:
 
@@ -314,12 +354,20 @@ FastAPI app com as rotas:
 | Voto duplo | HMAC(NUSP) + UNIQUE constraint na Tabela 1 | ✅ Implementado |
 | Correlação temporal | `created_at` apenas na Tabela 1, ausente nas Tabelas 2 e 3 | ✅ Implementado |
 | Correlação por FK | Zero Foreign Keys entre tabelas | ✅ Implementado |
+| Correlação por rowid | WITHOUT ROWID em todas as tabelas — sem auto-increment implícito | ✅ Implementado |
 | Exposição de audit_id | Tabela 3 sem audit_id + backend filtra na Tabela 2 | ✅ Implementado |
-| Spam de scraper via /validate | Rate limit por IP: 5 tentativas / 2 min. Previne abertura excessiva de Chromiums e bloqueio do IP pelo Júpiter/Cloudflare | ✅ Implementado |
-| Brute-force de senha via /audit | HMAC computacionalmente barato mas requer NUSP + senha | ⚠️ Sem rate limit (risco baixo) |
+| Spam de scraper via /validate | Rate limit por IP: 5 tentativas / 2 min | ✅ Implementado |
+| Brute-force de senha via /audit | Rate limit por NUSP: 5 tentativas / 1 min (chave `audit:NUSP`, não IP — evita bloqueio colateral via NAT no eduroam) | ✅ Implementado |
 | Login não-USP | Hard check `@usp.br` no callback OAuth | ✅ Implementado |
-| CSRF em /vote | Requer `nusp` + `voter_hash` na sessão (só existem após validação do PDF) + `audit_password` no form | ✅ Risco residual mínimo |
+| CSRF em /vote | SameSite=Lax + sessão requer OAuth + validação do PDF | ✅ Implementado |
 | Timing attack no hash | `hmac.compare_digest()` (tempo constante) | ✅ Implementado |
+| Clickjacking | `X-Frame-Options: DENY` + CSP `frame-ancestors 'none'` | ✅ Implementado |
+| MIME-type sniffing | `X-Content-Type-Options: nosniff` | ✅ Implementado |
+| Downgrade HTTP | `Strict-Transport-Security: max-age=31536000` (produção) | ✅ Implementado |
+| XSS injection | CSP restritiva + Jinja2 auto-escape + `X-XSS-Protection` | ✅ Implementado |
+| Aluno de outra unidade (ICMC) | Filtro por `ELIGIBLE_COURSE_CODES` (97001-97008) com prioridade sobre unidade | ✅ Implementado |
+| Database locked em pico | `PRAGMA busy_timeout=15000` — espera 15s antes de falhar | ✅ Implementado |
+| Vazamento de dados pessoais | RG removido do código; NUSP/nome não logados; PDF nunca salvo em disco | ✅ Implementado |
 | Cache de CSS antigo | Cache-busting via `?v=N` no link do CSS | ✅ Implementado |
 | Comprometimento de SALT_KEY | SALT_2 separada protege audit_ids | ✅ Implementado |
 
@@ -349,6 +397,7 @@ VOTE_TITLE=Assembleia EESC-USP — Greve 2026
 VOTE_QUESTION=Você é a favor da greve?
 VOTE_OPTIONS=Sim,Não,Nulo
 ELIGIBLE_UNIT_CODES=97
+ELIGIBLE_COURSE_CODES=97001,97002,97003,97004,97005,97006,97007,97008
 ELIGIBLE_KEYWORDS=Escola de Engenharia de São Carlos|EESC
 ```
 
@@ -375,13 +424,27 @@ pm2 logs vote-core --lines 10
 # - Conferir em /results
 ```
 
-### 8.3 Arquivos Ignorados pelo Git
+### 8.3 Backup Seguro do Banco
+
+```bash
+# NUNCA use cp/rsync para copiar votes.db (WAL pode corromper)
+# Use o script de backup que usa sqlite3.backup() nativo:
+./scripts/backup.sh
+
+# Para cron durante a assembleia (a cada 15 min):
+*/15 * * * * /home/lycalopx/repos/Vote-Core/scripts/backup.sh
+```
+
+O script verifica integridade do backup via `PRAGMA integrity_check` e mantém os últimos 20 backups.
+
+### 8.4 Arquivos Ignorados pelo Git
 
 ```gitignore
 .env                    # Credenciais reais
 *.db / *.db-wal / *.db-shm  # Banco + WAL files
 .venv/                  # Virtual environment
 logs/                   # PM2 logs
+backups/                # Backups do banco
 temp/                   # Logs de chat sensíveis
 gemini/                 # Conversas de desenvolvimento com IA
 ```
@@ -390,7 +453,7 @@ gemini/                 # Conversas de desenvolvimento com IA
 
 ## 9. Testes
 
-26 testes automatizados cobrindo os módulos críticos de segurança:
+50 testes automatizados cobrindo todos os módulos de segurança:
 
 ### Crypto: `generate_voter_hash` (6 testes)
 - Mesmo NUSP → mesmo hash (determinístico)
@@ -423,29 +486,63 @@ gemini/                 # Conversas de desenvolvimento com IA
 - Busca por UUID encontra/não encontra
 - Busca por audit_id encontra/não encontra
 
-### Schema (2 testes)
+### Schema — integridade do modelo (7 testes)
 - Tabela `votes` NÃO tem campo `created_at`
 - Tabela `votes` TEM campo `audit_id`
+- Tabela `public_votes` NÃO tem campo `audit_id` (defesa em profundidade)
+- Tabela `voter_hashes` usa WITHOUT ROWID (PK = `hash`, sem `id`)
+- Tabela `votes` usa WITHOUT ROWID (PK = `uuid`, sem `id`)
+- Tabela `public_votes` usa WITHOUT ROWID (PK = `uuid`, sem `id`)
+
+### Scraper — estrutura de dados e elegibilidade (14 testes)
+- `DocumentData` NÃO tem campo `rg` (dado pessoal removido)
+- `DocumentData` TEM campo `course_code`
+- `DocumentData` tem exatamente os 6 campos esperados
+- `COURSE_CODE_PATTERN` extrai `97001` de texto real
+- `COURSE_CODE_PATTERN` rejeita texto sem código
+- Sem filtros → aceita todos
+- Filtro de unidade: match (97) e no-match (55)
+- Filtro de curso: match (97001) e no-match (97002)
+- Curso tem prioridade sobre unidade (curso errado + unidade certa = rejeitado)
+- Lista de cursos aceita se pelo menos um dá match
+- Keyword match e no-match
+
+### Config — propriedades computadas (2 testes)
+- `eligible_course_codes_list` vazio → lista vazia
+- `eligible_course_codes_list` com valores → lista correta
+
+### SQLite — pragmas de segurança (3 testes)
+- `busy_timeout >= 15000ms` (anti-database-locked)
+- `journal_mode = wal`
+- `wal_autocheckpoint = 1000`
 
 ```bash
 # Executar testes
 source .venv/bin/activate
 pytest tests/ -v
-# Resultado: 26 passed in 0.45s
+# Resultado: 50 passed in 0.58s
 ```
 
 ---
 
 ## 10. Limitações Conhecidas
 
-| Limitação | Impacto | Mitigação possível |
+| Limitação | Impacto | Mitigação |
 |---|---|---|
-| Sem rate limiting em `/audit` | Brute-force teórico de senha | Implementar delay após 3 tentativas por IP |
-| Sem stress test em produção | Comportamento sob carga real desconhecido | Semaphore(4) + asyncio.timeout(60) limitam concorrência |
-| `NUSP_PATTERN` nunca testado com PDF real | Possível falha na extração | Testar com atestado real antes da assembleia |
-| Sessão cookie não é `Secure` quando `DEBUG=true` | Cookie enviado via HTTP (Cloudflare mitiga via HTTPS forçado) | Setar `DEBUG=false` ou separar flags |
+| Sem stress test em produção | Comportamento sob carga real desconhecido | Semaphore(4) + asyncio.timeout(60) + busy_timeout=15s |
+| Sessão cookie não é `Secure` quando `DEBUG=true` | Cookie enviado via HTTP | `DEBUG=false` em produção → Secure=True |
 | SQLite não escala para milhares simultâneos | ~50-100 escritas/s no WAL mode | Suficiente para assembleia EESC (~200-500 eleitores) |
-| Sem backup automático do banco | Perda do `.db` = perda dos votos | Implementar cron de backup ou snapshot |
+
+### Limitações resolvidas nesta versão
+
+| Era limitação | Resolução |
+|---|---|
+| Sem rate limit em `/audit` | ✅ 5 tentativas/60s por IP |
+| Sem backup automático | ✅ `scripts/backup.sh` com `sqlite3.backup()` ACID-safe |
+| NUSP_PATTERN nunca testado com PDF real | ✅ Testado e confirmado com PDF real (NUSP: 15436911) |
+| Sem filtro por curso (ICMC podia votar) | ✅ `ELIGIBLE_COURSE_CODES` com prioridade sobre unidade |
+| RG extraído sem necessidade | ✅ `RG_PATTERN` e campo `rg` removidos completamente |
+| Sem security headers HTTP | ✅ 6 headers: CSP, HSTS, X-Frame-Options, etc. |
 
 ---
 
@@ -478,3 +575,9 @@ pytest tests/ -v
 ### Bug 6: CSS cacheado pelo Cloudflare
 - **Sintoma**: Mudanças de estilo não apareciam no browser
 - **Fix**: Cache-busting via `style.css?v=N` no `base.html`
+
+### Bug 7: Correlação por rowid sequencial (CRÍTICO)
+- **Sintoma**: Registros inseridos na mesma transação (`voter_hashes` + `votes`) tinham o mesmo rowid auto-incrementado, permitindo correlação por posição
+- **Causa**: O SQLite atribui por padrão um `rowid` implícito sequencial a cada registro
+- **Identificado por**: Eduardo Paiva (ref: `temp/reference2.md`): *"Se os dados estão sendo salvos sequencialmente, os mesmos índices representam o mesmo voto"*
+- **Fix**: `WITHOUT ROWID` em todas as 3 tabelas + PKs naturais (`hash`, `uuid`) eliminando completamente o auto-increment implícito. O swap de Paiva (shuffle pós-inserção) já existia como camada extra, mas `WITHOUT ROWID` é a solução definitiva a nível de schema.

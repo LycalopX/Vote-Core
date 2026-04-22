@@ -701,6 +701,51 @@ body {
     font-size: 0.85em;
 }
 
+/* ─── Eligibility Info (Login Page) ─────────── */
+.eligibility-info {
+    margin-top: 1.25rem;
+    padding: 1rem 1.25rem;
+    background: rgba(99, 102, 241, 0.04);
+    border: 1px solid rgba(99, 102, 241, 0.12);
+    border-radius: var(--radius-md);
+    font-size: 0.83rem;
+}
+
+.eligibility-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.6rem;
+}
+
+.eligibility-icon {
+    font-size: 1rem;
+}
+
+.eligibility-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.3rem 0;
+}
+
+.eligibility-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.eligibility-value {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.01em;
+}
+
 .info-box {
     background: rgba(99, 102, 241, 0.05);
     border: 1px solid rgba(99, 102, 241, 0.12);
