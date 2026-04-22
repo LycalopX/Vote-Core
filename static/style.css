@@ -160,6 +160,14 @@ body {
     overflow: hidden;
 }
 
+.guide-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin-bottom: 20px;
+    margin-top: 20px;
+}
+
 .card-lg {
     width: 100%;
     max-width: 560px;
