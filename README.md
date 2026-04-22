@@ -32,7 +32,7 @@ Para detalhes técnicos aprofundados (schema do banco, fluxo HTTP, vetores de at
 
 **O problema**: Uma conta `@usp.br` pode ser de qualquer campus (Poli, FEA, FFLCH...). Como garantir que apenas alunos da EESC votem?
 
-**A solução**: O aluno fornece o **código de controle** do seu Atestado de Matrícula, emitido pelo sistema Júpiter da USP. O backend consulta o portal oficial da USP (`portalservicos.usp.br/iddigital`), extrai o PDF do atestado, e verifica se o curso pertence à **Escola de Engenharia de São Carlos** (código de unidade `97`).
+**A solução**: O aluno fornece o **código de controle** do seu Atestado de Matrícula, emitido pelo sistema Júpiter da USP. O backend chama diretamente a **API REST** do portal oficial da USP (`portalservicos.usp.br/iddigital`), baixa o PDF do atestado em memória, e verifica se o curso pertence à **Escola de Engenharia de São Carlos** (código de unidade `97`).
 
 **Por que não pedir o NUSP direto?** Porque qualquer pessoa pode inventar um NUSP. O atestado do Júpiter é um documento oficial que só o aluno matriculado consegue emitir, e o portal da USP garante a autenticidade. Nós **validamos a fonte** — não confiamos em input do usuário.
 
@@ -134,12 +134,12 @@ O banco de dados contém apenas: hashes (irreversíveis), UUIDs (aleatórios), v
 
 ```
 Aluno → Google OAuth (@usp.br) → Código de Controle do Júpiter
-    → Playwright consulta portal USP → PDF do atestado (em memória)
+    → API REST do portal USP → PDF do atestado (em memória, ~200ms)
     → pdfplumber extrai NUSP + Curso → Verifica elegibilidade (EESC?)
     → HMAC-SHA256(NUSP, SALT_KEY) → Checa hash no banco → Voto duplicado?
     → Eleitor cria senha de auditoria
     → Registra hash (Tabela 1)
-    → Gera audit_id = HMAC(NUSP + senha, SALT_2)
+    → Gera audit_id = HMAC(NUSP + "\x00" + senha, SALT_2)
     → Registra voto (Tabela 2: uuid + audit_id + vote)
     → Registra espelho público (Tabela 3: uuid + vote)
     → Exibe recibo com UUID
@@ -150,7 +150,7 @@ Aluno → Google OAuth (@usp.br) → Código de Controle do Júpiter
 | Componente | Tecnologia | Justificativa |
 |---|---|---|
 | **Backend** | Python 3.13 + FastAPI | Desenvolvimento rápido, validação automática, async nativo |
-| **Scraper** | Playwright (Chromium) | Único framework que consegue renderizar o SPA Vue.js do portal USP e lidar com Cloudflare Turnstile |
+| **Scraper** | **httpx** (REST direto) | API REST do portal IDDigital da USP retorna o PDF diretamente via HTTP — sem necessidade de browser. ~200ms por validação vs ~30s com Playwright |
 | **Extração de PDF** | pdfplumber | Biblioteca madura para extração de texto de PDFs — a USP serve o atestado como PDF, não HTML |
 | **Criptografia** | HMAC-SHA256 (stdlib) | Algoritmo padrão da indústria, incluído na biblioteca padrão do Python, sem dependências externas |
 | **Banco de dados** | SQLite (WAL mode) | Arquivo local, zero configuração, leitores concorrentes via WAL. Suficiente para ~200-500 eleitores |
@@ -172,7 +172,7 @@ source .venv/bin/activate
 
 # 3. Instalar dependências
 pip install -r requirements.txt
-playwright install chromium --with-deps
+# Nota: Playwright foi removido. httpx é a única dependência de rede.
 
 # 4. Configurar variáveis de ambiente
 cp .env.example .env
@@ -208,11 +208,11 @@ Todas as variáveis são configuráveis via `.env` — **nenhuma mudança de có
 ```
 Vote-Core/
 ├── app/
-│   ├── main.py          # Rotas FastAPI, rate limiter, orquestração
+│   ├── main.py          # Rotas FastAPI, rate limiter (IP + NUSP), orquestração
 │   ├── config.py        # Configurações via .env (pydantic-settings)
 │   ├── auth.py          # Google OAuth 2.0 + filtro @usp.br
-│   ├── scraper.py       # Playwright → Portal USP → PDF → Extração
-│   ├── crypto.py        # HMAC-SHA256 — deduplicação + auditoria
+│   ├── scraper.py       # httpx → API REST do portal USP → PDF → Extração
+│   ├── crypto.py        # HMAC-SHA256 — deduplication + auditoria
 │   ├── database.py      # SQLite async — CRUD para as 3 tabelas
 │   ├── models.py        # Definição das 3 tabelas (zero foreign keys)
 │   └── templates/       # Frontend Jinja2 (dark theme, glassmorphism)
@@ -228,9 +228,13 @@ Vote-Core/
 │   ├── style.css        # Dark theme com glassmorphism
 │   └── js/app.js        # JavaScript minimal
 ├── tests/
-│   └── test_core.py     # 26 testes (crypto, database, schema)
+│   ├── test_core.py     # 50 testes unitários (crypto, database, schema)
+│   └── test_stress.py   # 28 testes de stress (concorrência, race conditions)
+├── scripts/
+│   └── backup.sh        # Backup ACID-safe via sqlite3.backup()
 ├── ARCHITECTURE.md      # Documentação técnica completa
 ├── requirements.txt     # Dependências Python
+├── pytest.ini           # Configuração pytest-asyncio (asyncio_mode=auto)
 ├── .env.example         # Template de variáveis de ambiente
 ├── ecosystem.config.js  # Configuração PM2
 └── .gitignore           # Protege .env, banco, cache, e logs
@@ -239,11 +243,12 @@ Vote-Core/
 ## 🧪 Testes
 
 ```bash
-# Rodar a suite completa (26 testes)
-source .venv/bin/activate
+# Rodar a suite completa (78 testes)
 pytest tests/ -v
 
-# Cobertura: crypto (15), database (9), schema (2)
+# Cobertura:
+#   test_core.py    — 50 testes unitários: crypto (15), database (9), schema (7), scraper (14), config (2), pragmas (3)
+#   test_stress.py  — 28 testes de stress: race conditions, concorrência, rate limiter, semáforo, memória
 ```
 
 ## 👥 Time
