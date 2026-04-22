@@ -347,12 +347,11 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
 
         if not doc_data.is_eligible:
             logger.warning(
-                "Eleitor não elegível — curso: %s (%s)",
-                doc_data.curso, doc_data.course_code or "?",
+                "Eleitor não elegível — curso: %s",
+                doc_data.curso,
             )
             error = (
-                f"Seu curso ({doc_data.curso or 'não identificado'}, "
-                f"código {doc_data.course_code or '?'}) "
+                f"Seu curso ({doc_data.curso or 'não identificado'}) "
                 "não está na lista de elegíveis para esta votação."
             )
             return templates.TemplateResponse(
