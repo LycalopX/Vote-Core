@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
@@ -8,13 +7,10 @@
     <title>{% block title %}Urna Eletrônica EESC{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
-        rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=4">
     {% block head %}{% endblock %}
 </head>
-
 <body>
     <div class="noise-overlay"></div>
     <div class="gradient-bg"></div>
@@ -22,7 +18,8 @@
     <header class="app-header">
         <div class="header-inner">
             <a href="/" class="logo">
-                <span class="logo-text">Urna USP</span>
+                <span class="logo-icon">🗳️</span>
+                <span class="logo-text">Urna EESC</span>
             </a>
             {% if user %}
             <div class="user-info">
@@ -47,5 +44,4 @@
     <script src="/static/js/app.js"></script>
     {% block scripts %}{% endblock %}
 </body>
-
 </html>

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Guia — {{ settings.VOTE_TITLE }}{% endblock %}
+
+{% block content %}
+<div class="page-center">
+    <div class="card card-lg animate-in">
+        <div class="card-glow"></div>
+
+        <div class="step-badge">Guia</div>
+
+        <h1 class="card-title">Como obter o documento</h1>
+        <p class="card-subtitle">
+            Siga os passos abaixo para emitir seu <strong>Atestado de Matrícula</strong> no JúpiterWeb
+            e obter o código de validação.
+        </p>
+
+        <div class="guide-steps">
+
+            <div class="guide-step">
+                <p class="guide-text">
+                    1. Logar no seu jupiterweb usando conta USP
+                </p>
+                <img src="/static/imagens/passo1.png" alt="Login no Jupiterweb" class="guide-image">
+            </div>
+
+            <div class="guide-step">
+                <p class="guide-text">
+                    2. Selecionar 'Emissão de Documentos' → 'Documentos'
+                </p>
+                <img src="/static/imagens/passo2.png" alt="Menu de documentos" class="guide-image">
+            </div>
+
+            <div class="guide-step">
+                <p class="guide-text">
+                    3. Selecionar 'Atestado de Matrícula' e clicar em gerar
+                </p>
+                <img src="/static/imagens/passo3.png" alt="Gerar atestado" class="guide-image">
+            </div>
+
+            <div class="guide-step">
+                <p class="guide-text">
+                    4. Copiar o código de controle e autenticidade
+                </p>
+                <img src="/static/imagens/passo4.png" alt="Código de autenticidade" class="guide-image">
+            </div>
+
+        </div>
+
+        <div style="margin-top: 20px;">
+            <a href="/validate" class="btn btn-primary btn-lg btn-block">
+                Voltar para validação
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

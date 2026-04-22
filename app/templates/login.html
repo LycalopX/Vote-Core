@@ -58,29 +58,8 @@
 
         <div class="card-footer-info">
             <p>🔐 Apenas contas <code>@usp.br</code> são aceitas</p>
-            <p>📄 Você precisará do código do seu atestado do Júpiter</p>
+            <p>📄 Você precisará do código do seu atestado do Júpiter. Clique <a href="/guide" target="_blank">aqui</a> para saber como emitir.</p>
         </div>
-
-        {% if eligible_courses or eligible_units or eligible_keywords %}
-        <div class="eligibility-info">
-            <div class="eligibility-header">
-                <span class="eligibility-icon">🏛️</span>
-                <span>Votação restrita a:</span>
-            </div>
-            {% if eligible_units %}
-            <div class="eligibility-item">
-                <span class="eligibility-label">Instituto:</span>
-                <span class="eligibility-value">Unidade {{ eligible_units }} — Escola de Engenharia de São Carlos</span>
-            </div>
-            {% endif %}
-            {% if eligible_courses %}
-            <div class="eligibility-item">
-                <span class="eligibility-label">Cursos:</span>
-                <span class="eligibility-value">{{ eligible_courses }}</span>
-            </div>
-            {% endif %}
-        </div>
-        {% endif %}
 
         <a href="/audit" class="btn btn-ghost btn-lg btn-block" id="btn-audit-home">
             🔑 Já votou? Verifique seu voto
