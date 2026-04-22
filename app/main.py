@@ -350,15 +350,16 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
                 "Eleitor não elegível — curso: %s",
                 doc_data.curso,
             )
+            curso_display = doc_data.curso or "não identificado"
             error = (
-                f"Seu curso ({doc_data.curso or 'não identificado'}) "
-                "não está na lista de elegíveis para esta votação."
+                f"Seu documento foi validado, porém seu curso ({curso_display}) "
+                "não atende os requisitos desta votação. "
+                "Esta urna é restrita a alunos da EESC-USP matriculados nos cursos elegíveis."
             )
             return templates.TemplateResponse(
                 request,
-                "error.html",
-                {"user": user, "settings": settings,
-                 "error_title": "Não Elegível", "error_message": error},
+                "validate.html",
+                {"user": user, "settings": settings, "error": error},
             )
 
         # ── Fase C: Catraca de Deduplicação ──
