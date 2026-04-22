@@ -191,21 +191,30 @@ def _check_eligibility(text: str, settings) -> bool:
     1. Código de unidade (ex: '97' para EESC)
     2. Keywords no texto (ex: 'Escola de Engenharia de São Carlos')
     """
-    # Se não há critérios definidos, aceita todos
-    if not settings.eligible_unit_codes_list and not settings.eligible_keywords_list:
-        return True
+
 
     # Checar código de unidade
+    code_elegible = False
+
+    if not settings.eligible_unit_codes_list: 
+        code_elegible = True
+    
     for code in settings.eligible_unit_codes_list:
         if code and re.search(rf"\b{re.escape(code)}\s*-", text):
-            return True
+            code_elegible = True
 
     # Checar keywords
+    keyword_elegible = False
+
+    if not settings.eligible_keywords_list:
+        keyword_elegible = True
+
     for keyword in settings.eligible_keywords_list:
         if keyword and keyword.lower() in text.lower():
-            return True
+            keyword_elegible = True
 
-    return False
+
+    return code_elegible and keyword_elegible
 
 
 # ─── Scraper Playwright ──────────────────────────────────────────
