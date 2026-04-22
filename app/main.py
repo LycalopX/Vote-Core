@@ -44,9 +44,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Semaphore para limitar concorrência do Scraper ──────────────
-# Com httpx (sem Playwright/Chromium), cada request é uma chamada HTTP leve.
-# 50 concurrent é seguro para o servidor da USP e o MP60.
-MAX_CONCURRENT_SCRAPERS = 50
+# Com httpx (sem Playwright/Chromium), cada request é uma chamada HTTP leve
+# (~200-500ms). 20 concurrent é mais que suficiente para 500 usuários em
+# 2 horas (~4 req/min) e respeita a infraestrutura do servidor da USP.
+MAX_CONCURRENT_SCRAPERS = 20
 scraper_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SCRAPERS)
 
 # ─── Rate Limiter por IP (proteção anti-spam no /validate) ──────
@@ -54,8 +55,13 @@ RATE_LIMIT_MAX_ATTEMPTS = 5       # máximo de tentativas por janela
 RATE_LIMIT_WINDOW_SECONDS = 120   # janela de 2 minutos
 
 # Rate limiter para /audit (anti-brute-force de NUSP+senha)
-AUDIT_RATE_LIMIT_MAX = 5          # máximo de tentativas por janela
+AUDIT_RATE_LIMIT_MAX = 5          # máximo de tentativas por janela por NUSP
 AUDIT_RATE_LIMIT_WINDOW = 60      # janela de 1 minuto
+
+# Rate limit por IP no /audit — bloqueia enumeração rotacionando NUSPs
+# (ex: tentar NUSP 1..50000 com 1 req cada)
+AUDIT_IP_RATE_LIMIT_MAX = 20      # máximo de tentativas por IP por janela
+AUDIT_IP_RATE_LIMIT_WINDOW = 60   # janela de 1 minuto
 
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 
@@ -103,6 +109,33 @@ def _check_audit_rate_limit(nusp: str) -> bool:
         _rate_limit_store[key] = valid_times
 
     if len(valid_times) >= AUDIT_RATE_LIMIT_MAX:
+        return False
+    _rate_limit_store[key].append(now)
+    return True
+
+
+def _check_audit_ip_rate_limit(ip: str) -> bool:
+    """
+    Rate limiter por IP para /audit.
+
+    Complementa o rate limit por NUSP: previne ataques de enumeração onde
+    o atacante rotaciona NUSPs diferentes para contornar o limite por NUSP.
+    Ex: NUSP 1 (1 req) → NUSP 2 (1 req) → ... → NUSP 50000 (1 req)
+    — cada NUSP fica abaixo do limite individual, mas o IP é bloqueado
+    após 20 tentativas por minuto.
+    """
+    key = f"audit_ip:{ip}"
+    now = time.monotonic()
+    valid_times = [
+        t for t in _rate_limit_store[key]
+        if now - t < AUDIT_IP_RATE_LIMIT_WINDOW
+    ]
+    if not valid_times:
+        del _rate_limit_store[key]
+    else:
+        _rate_limit_store[key] = valid_times
+
+    if len(valid_times) >= AUDIT_IP_RATE_LIMIT_MAX:
         return False
     _rate_limit_store[key].append(now)
     return True
@@ -538,7 +571,23 @@ async def audit_submit(
              "result": None, "error": "Preencha o Número USP e a senha."},
         )
 
-    # ── Rate limit por NUSP (anti-brute-force) ──
+    # ── Rate limit por IP (anti-enumeração de NUSPs) ──
+    # Bloqueia atacantes que rotacionam NUSPs para contornar o limite por NUSP.
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_audit_ip_rate_limit(client_ip):
+        logger.warning("Rate limit de IP no audit excedido")
+        return templates.TemplateResponse(
+            request,
+            "audit.html",
+            {"user": user, "settings": settings,
+             "result": None, "my_uuid": None, "public_votes": [],
+             "error": (
+                 f"Muitas tentativas deste endereço. Aguarde {AUDIT_IP_RATE_LIMIT_WINDOW} "
+                 "segundos e tente novamente."
+             )},
+        )
+
+    # ── Rate limit por NUSP (anti-brute-force da senha) ──
     # Chave é o NUSP, não o IP, porque na rede eduroam da USP
     # centenas de alunos compartilham o mesmo IP via NAT.
     if not _check_audit_rate_limit(nusp_clean):

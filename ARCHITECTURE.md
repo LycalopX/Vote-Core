@@ -1,8 +1,8 @@
 # Vote-Core — Documentação Técnica Completa
 
 > **Sistema de votação eletrônica anônima e auditável para a EESC-USP.**
-> Versão: 2.2 (Hardening: Security Headers + Rate Limiting + Elegibilidade por Curso)
-> Data: 21 de abril de 2026
+> Versão: 2.3 (API httpx: Playwright removido + Hardening de Auditoria + Stress Tests)
+> Data: 22 de abril de 2026
 > Autores: Alex (LycalopX), Eduardo Paiva (EduardoAPaiva), com assistência de IA
 
 ---
@@ -41,9 +41,9 @@ Vote-Core é um sistema web de votação eletrônica construído para assembleia
 | Banco de dados | SQLite + aiosqlite (modo WAL) |
 | ORM | SQLAlchemy 2.0 (async) |
 | Autenticação | Google OAuth 2.0 (restrito a `@usp.br`) |
-| Scraper | Playwright (headless Chromium) |
+| Scraper | **httpx** (cliente HTTP assíncrono — sem browser) |
 | Proxy reverso | Cloudflare Tunnel (`cloudflared`) |
-| Process manager | PM2 |
+| Process manager | PM2 + pm2-logrotate (10MB/arquivo, 5 arquivos) |
 | Frontend | Jinja2 + CSS puro (dark theme, glassmorphism) |
 
 ---
@@ -75,9 +75,11 @@ O sistema usa **duas chaves HMAC independentes**:
 1. **Google OAuth 2.0** com restrição hard-coded ao domínio `@usp.br`
    - Parâmetro `hd=usp.br` no redirect (filtro visual na tela do Google)
    - Validação server-side no callback: `email.endswith("@usp.br")` — rejeita qualquer email fora do domínio mesmo que o parâmetro `hd` seja removido
-2. **Validação de matrícula** via scraper do sistema Júpiter da USP
+2. **Validação de matrícula** via API REST do portal IDDigital da USP
    - O aluno fornece o código de controle do atestado de matrícula
-   - O scraper acessa o Júpiter, baixa o PDF, e extrai: NUSP, nome, curso, código de curso, unidade
+   - O sistema chama diretamente `GET /proxy/wsportal/id-digital/documentos/{code}` via **httpx** (sem browser)
+   - O PDF é baixado em memória (~200ms por request vs ~30s com Playwright)
+   - Dados extraídos: NUSP, nome, curso, código de curso, unidade
    - Elegibilidade verificada em cascata: `ELIGIBLE_COURSE_CODES` → `ELIGIBLE_UNIT_CODES` → `ELIGIBLE_KEYWORDS`
    - Nenhum dado pessoal (RG, nome completo) é extraído ou armazenado
 
@@ -198,10 +200,10 @@ Etapa 1: Login OAuth
 
 Etapa 2: Validação de Matrícula
     Eleitor insere o código de controle do atestado do Júpiter
-    → Scraper (Playwright) acessa o Júpiter via Chromium headless
-    → Baixa o PDF do atestado
+    → Sistema chama API REST: GET /proxy/wsportal/id-digital/documentos/{code}
+    → PDF baixado em memória via httpx (~200ms, sem browser)
     → Extrai: NUSP, nome, curso, unidade
-    → Valida unidade (código 97 = EESC)
+    → Valida elegibilidade (código de curso / unidade / keyword)
     → Calcula voter_hash = HMAC(NUSP, SALT_KEY)
     → Verifica se voter_hash já existe na Tabela 1
     → Se duplicata: "Você já votou"
@@ -251,25 +253,31 @@ Três funções puras, sem side-effects:
 
 `verify_voter_hash` usa `hmac.compare_digest()` para prevenir timing attacks.
 
-### 5.2 `app/scraper.py` (~500 linhas)
+### 5.2 `app/scraper.py` (~300 linhas)
 
-Playwright-based scraper que:
-1. Abre uma instância headless de Chromium
-2. Navega ao sistema Júpiter da USP com o código de controle
-3. Baixa o PDF do atestado de matrícula
-4. Extrai dados via regex:
-   - `NUSP_PATTERN`: `código\s+USP\s+(\d{7,8})` — dado primário
-   - `CURSO_PATTERN`: nome do curso
-   - `COURSE_CODE_PATTERN`: código numérico (ex: 97001)
-   - `UNIDADE_PATTERN`: código da unidade (97 = EESC)
-   - **RG não é extraído** — removido por ser dado pessoal desnecessário
-5. Verificação de elegibilidade em cascata:
-   - Se `ELIGIBLE_COURSE_CODES` definido → verifica código de curso (prioridade máxima)
-   - Senão, se `ELIGIBLE_UNIT_CODES` definido → verifica unidade
-   - Senão, se `ELIGIBLE_KEYWORDS` definido → busca texto no PDF
-   - Se nenhum filtro definido → aceita todos
+**Arquitetura**: Cliente HTTP puro via `httpx`. Sem browser, sem Chromium.
 
-Concorrência limitada por `asyncio.Semaphore(4)` com `asyncio.timeout(60)`.
+**Descoberta (22/04/2026)**: A API REST do portal IDDigital da USP (`/proxy/wsportal/id-digital/documentos/{code}`) retorna o PDF diretamente via HTTP, sem validar o token Turnstile server-side. O header `g-recaptcha-token` é aceito com qualquer valor — a validação existe apenas no frontend Vue.js.
+
+Fluxo:
+1. `_parse_control_code()` — normaliza o código de controle (remove hífens/espaços, valida 16 chars)
+2. `GET /proxy/wsportal/id-digital/versao-documentos/{code}` — verifica se há versão mais nova do documento
+3. `GET /proxy/wsportal/id-digital/documentos/{code_atual}` — baixa o PDF em memória
+4. Extrai dados via regex: `NUSP_PATTERN`, `CURSO_PATTERN`, `COURSE_CODE_PATTERN`, `UNIDADE_PATTERN`
+5. **RG não é extraído** — removido por ser dado pessoal desnecessário
+6. `_check_eligibility()` — verifica filtros em cascata
+
+**Vantagens sobre o Playwright anterior**:
+
+| | Playwright (removido) | httpx (atual) |
+|---|---|---|
+| Tempo por validação | ~30s | ~200ms |
+| RAM por request | ~150MB (Chromium) | ~1MB |
+| Semaphore | 4 slots | 20 slots |
+| Risco de ban por fingerprint | Alto | Inexistente |
+| Zombie slots por timeout | Risco real | Eliminado |
+
+Concorrência limitada por `asyncio.Semaphore(20)`.
 
 ### 5.3 `app/auth.py` (155 linhas)
 
@@ -341,9 +349,21 @@ FastAPI app com as rotas:
 
 **Justificativa**: O sistema roda em um Blackview MP60 (mini PC) com recursos limitados. SQLite com WAL mode é suficiente para a escala esperada (~200-500 eleitores em uma assembleia). Não há necessidade de servidor de banco separado. O arquivo único (`votes.db`) simplifica backup e transporte.
 
-### 6.5 Playwright (não requests/BeautifulSoup)
+### 6.5 httpx em vez de Playwright
 
-**Justificativa**: O sistema Júpiter da USP usa JavaScript pesado e Cloudflare Turnstile. Requests puro não consegue renderizar a página. Playwright com Chromium headless é a única forma confiável de interagir com o Júpiter programaticamente.
+**Contexto**: O sistema originalmente usava Playwright (headless Chromium) para acessar o Júpiter da USP, pois o portal é um SPA Vue.js com Cloudflare Turnstile. A preocupação era que 500 requests automáticos do mesmo IP causassem um ban.
+
+**Descoberta**: Ao analisar o código JavaScript minificado do SPA (`WebdocServico-C2sypKco.js`), identificou-se a API REST subjacente:
+- `GET /proxy/wsportal/id-digital/versao-documentos/{code}` → JSON com código atual
+- `GET /proxy/wsportal/id-digital/documentos/{code}` → PDF binário
+
+Ambos os endpoints aceitam qualquer valor no header `g-recaptcha-token` — o Turnstile é validado apenas no frontend, não no servidor. Trata-se de um **CWE-306** (Missing Authentication for Critical Function): a proteção existe visualmente mas não é aplicada server-side.
+
+**Decisão**: Substituir Playwright por `httpx` com chamadas diretas à API.
+
+**Justificativa**: Elimina risco de ban por fingerprint de browser headless, reduz latência de ~30s para ~200ms, elimina dependência de Chromium (~300MB), e elimina zombie slots por timeout de rede.
+
+**Nota operacional**: Se a USP corrigir a vulnerabilidade (adicionando validação server-side do token), o fallback é reativar o Playwright — o histórico está no git.
 
 ---
 
@@ -358,6 +378,7 @@ FastAPI app com as rotas:
 | Exposição de audit_id | Tabela 3 sem audit_id + backend filtra na Tabela 2 | ✅ Implementado |
 | Spam de scraper via /validate | Rate limit por IP: 5 tentativas / 2 min | ✅ Implementado |
 | Brute-force de senha via /audit | Rate limit por NUSP: 5 tentativas / 1 min (chave `audit:NUSP`, não IP — evita bloqueio colateral via NAT no eduroam) | ✅ Implementado |
+| **Enumeração de NUSPs via /audit** | **Rate limit por IP: 20 tentativas / 1 min — bloqueia rotação de NUSPs (NUSP 1→2→...→50000)** | ✅ Implementado |
 | Login não-USP | Hard check `@usp.br` no callback OAuth | ✅ Implementado |
 | CSRF em /vote | SameSite=Lax + sessão requer OAuth + validação do PDF | ✅ Implementado |
 | Timing attack no hash | `hmac.compare_digest()` (tempo constante) | ✅ Implementado |
@@ -370,6 +391,9 @@ FastAPI app com as rotas:
 | Vazamento de dados pessoais | RG removido do código; NUSP/nome não logados; PDF nunca salvo em disco | ✅ Implementado |
 | Cache de CSS antigo | Cache-busting via `?v=N` no link do CSS | ✅ Implementado |
 | Comprometimento de SALT_KEY | SALT_2 separada protege audit_ids | ✅ Implementado |
+| **Memory leak no rate limiter** | **Chaves expiradas deletadas do `defaultdict` (antes ficavam como listas vazias acumulando RAM)** | ✅ Implementado |
+| **Colisão de hash NUSP+senha** | **Separador `\x00` em `generate_audit_id`: `HMAC(NUSP + \x00 + senha)` — previne `"12" + "345" == "1" + "2345"`** | ✅ Implementado |
+| **Logs PM2 estourando disco** | **pm2-logrotate: max 10MB/arquivo, mantém 5 arquivos** | ✅ Implementado |
 
 ---
 
@@ -516,12 +540,26 @@ gemini/                 # Conversas de desenvolvimento com IA
 - `journal_mode = wal`
 - `wal_autocheckpoint = 1000`
 
+### Stress Tests (28 novos testes — `tests/test_stress.py`)
+
+| Categoria | Testes | O que valida |
+|---|---|---|
+| Crypto | 5 | 100 HMACs concorrentes, colisões, determinismo |
+| Database | 5 | 50 hashes simultâneos, race condition de deduplicação real, 100 inserts, WAL leitura+escrita concorrente, audit_id lookup |
+| Rate Limiter | 5 | Bloqueio após N tentativas, flood de 50 req, expiração de janela, isolamento NUSP vs IP |
+| Semaphore | 4 | Limite de slots, zombie que não trava a fila, throughput, exceção libera slot |
+| Scraper Parsing | 8 | Normalização de código, regex NUSP variações, elegibilidade com 100 keywords |
+| Memória | 2 | Chaves ghost no rate limiter, limpeza de timestamps |
+
+**Resultado crítico**: `test_deduplication_race_condition` confirma que 10 coroutines simultâneas com o mesmo hash → exatamente 1 aceita, 9 rejeitam. O `UNIQUE constraint` SQLite + WAL funciona corretamente sob race condition real.
+
 ```bash
-# Executar testes
-source .venv/bin/activate
+# Executar todos os testes
 pytest tests/ -v
-# Resultado: 50 passed in 0.58s
+# Resultado: 78 passed in ~2s
 ```
+
+**Configuração**: `pytest.ini` com `asyncio_mode=auto` e `asyncio_default_test_loop_scope=module` — necessário para que o engine SQLAlchemy (criado no event loop do módulo) seja compartilhado pelos testes assíncronos.
 
 ---
 
@@ -529,17 +567,25 @@ pytest tests/ -v
 
 | Limitação | Impacto | Mitigação |
 |---|---|---|
-| Sem stress test em produção | Comportamento sob carga real desconhecido | Semaphore(4) + asyncio.timeout(60) + busy_timeout=15s |
 | Sessão cookie não é `Secure` quando `DEBUG=true` | Cookie enviado via HTTP | `DEBUG=false` em produção → Secure=True |
 | SQLite não escala para milhares simultâneos | ~50-100 escritas/s no WAL mode | Suficiente para assembleia EESC (~200-500 eleitores) |
+| Rate limiters em memória volátil | Reiniciar o processo reseta os contadores | Aceitável — reinicialização limpa todos os estados, incluindo a assembleia |
 
 ### Limitações resolvidas nesta versão
 
 | Era limitação | Resolução |
 |---|---|
-| Sem rate limit em `/audit` | ✅ 5 tentativas/60s por IP |
+| Playwright com risco de ban Cloudflare | ✅ Substituído por httpx direto na API REST — sem fingerprint de browser |
+| Semaphore de 4 slots (gargalo) | ✅ Aumentado para 20 slots (httpx é 60x mais rápido que Playwright) |
+| Enumeração de NUSPs via /audit | ✅ Rate limit por IP (20 req/min) em paralelo ao rate limit por NUSP |
+| Memory leak no rate limiter | ✅ Chaves expiradas deletadas do defaultdict |
+| Colisão de hash em `generate_audit_id` | ✅ Separador `\x00` entre NUSP e senha |
+| Logs PM2 sem rotação | ✅ pm2-logrotate instalado (10MB, 5 arquivos) |
+| Swap de Paiva (shuffle pós-inserção) | ✅ Removido — `WITHOUT ROWID` é a solução definitiva |
+| Sem stress tests | ✅ 28 novos testes de carga em `tests/test_stress.py` |
+| Sem rate limit em `/audit` | ✅ 5 tentativas/60s por NUSP + 20 tentativas/60s por IP |
 | Sem backup automático | ✅ `scripts/backup.sh` com `sqlite3.backup()` ACID-safe |
-| NUSP_PATTERN nunca testado com PDF real | ✅ Testado e confirmado com PDF real (NUSP: 15436911) |
+| NUSP_PATTERN nunca testado com PDF real | ✅ Testado e confirmado com PDF real |
 | Sem filtro por curso (ICMC podia votar) | ✅ `ELIGIBLE_COURSE_CODES` com prioridade sobre unidade |
 | RG extraído sem necessidade | ✅ `RG_PATTERN` e campo `rg` removidos completamente |
 | Sem security headers HTTP | ✅ 6 headers: CSP, HSTS, X-Frame-Options, etc. |
@@ -580,4 +626,24 @@ pytest tests/ -v
 - **Sintoma**: Registros inseridos na mesma transação (`voter_hashes` + `votes`) tinham o mesmo rowid auto-incrementado, permitindo correlação por posição
 - **Causa**: O SQLite atribui por padrão um `rowid` implícito sequencial a cada registro
 - **Identificado por**: Eduardo Paiva (ref: `temp/reference2.md`): *"Se os dados estão sendo salvos sequencialmente, os mesmos índices representam o mesmo voto"*
-- **Fix**: `WITHOUT ROWID` em todas as 3 tabelas + PKs naturais (`hash`, `uuid`) eliminando completamente o auto-increment implícito. O swap de Paiva (shuffle pós-inserção) já existia como camada extra, mas `WITHOUT ROWID` é a solução definitiva a nível de schema.
+- **Fix**: `WITHOUT ROWID` em todas as 3 tabelas + PKs naturais (`hash`, `uuid`) eliminando completamente o auto-increment implícito. O swap de Paiva (shuffle pós-inserção) foi removido — `WITHOUT ROWID` é a solução definitiva a nível de schema.
+
+### Bug 8: Colisão de hash em `generate_audit_id`
+- **Sintoma (potencial)**: `HMAC("12" + "345", SALT_2) == HMAC("1" + "2345", SALT_2)` — dois pares NUSP+senha diferentes produziam o mesmo audit_id
+- **Causa**: Concatenação direta sem separador: `data = nusp + password`
+- **Fix**: Adicionado separador nulo: `data = nusp + "\x00" + password`. O byte `\x00` nunca aparece em NUSP (dígitos) nem em senhas típicas, tornando a fronteira inequívoca.
+
+### Bug 9: Memory leak no rate limiter
+- **Sintoma**: O `defaultdict` do rate limiter acumulava chaves fantasmas (IPs e NUSPs com listas vazias) indefinidamente
+- **Causa**: Ao limpar timestamps expirados, o código substituía a lista por `[]` mas nunca deletava a chave do dict
+- **Fix**: `if not valid_times: del _rate_limit_store[key]` — chaves expiradas são deletadas do dict
+
+### Bug 10: Event loop conflict nos stress tests
+- **Sintoma**: `RuntimeError: <Queue> is bound to a different event loop` nos testes de banco de dados concorrentes
+- **Causa**: `pytest-asyncio` criava um novo event loop por teste, mas o engine SQLAlchemy (scope=module) estava preso ao event loop da fixture de módulo
+- **Fix**: `pytest.ini` com `asyncio_mode=auto` + `asyncio_default_test_loop_scope=module` — todos os testes do módulo compartilham o mesmo event loop
+
+### Bug 11: Dados de teste estáticos causando colisões entre runs
+- **Sintoma**: `IntegrityError: UNIQUE constraint failed: votes.audit_id` ao rodar os testes duas vezes sem limpar o banco
+- **Causa**: Stress tests usavam strings fixas como `"stress_voter_aaaa...000"` e `"race_condition_xxx..."`
+- **Fix**: Todos os dados de teste usam `uuid.uuid4()` para garantir unicidade entre runs
