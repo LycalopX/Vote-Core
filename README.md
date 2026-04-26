@@ -36,7 +36,10 @@ Para detalhes técnicos aprofundados (schema do banco, fluxo HTTP, vetores de at
 
 **Por que não pedir o NUSP direto?** Porque qualquer pessoa pode inventar um NUSP. O atestado do Júpiter é um documento oficial que só o aluno matriculado consegue emitir, e o portal da USP garante a autenticidade. Nós **validamos a fonte** — não confiamos em input do usuário.
 
-**Os cursos elegíveis são configuráveis** via arquivo `.env`, permitindo adaptar o sistema para qualquer unidade ou assembleia.
+**Os cursos elegíveis são configuráveis** via arquivo `.env`:
+- `ELIGIBLE_COURSE_CODES=97001` — aceita apenas esse código de curso (prioridade máxima)
+- `ELIGIBLE_COURSE_CODES=*` — wildcard: pula verificação de curso, aplica filtro de unidade/keywords
+- `ELIGIBLE_COURSE_CODES=` (vazio) — usa somente filtro de unidade/keywords
 
 ### 3. Ninguém vota duas vezes — HMAC-SHA256
 
@@ -134,8 +137,9 @@ O banco de dados contém apenas: hashes (irreversíveis), UUIDs (aleatórios), v
 
 ```
 Aluno → Google OAuth (@usp.br) → Código de Controle do Júpiter
-    → Playwright consulta portal USP → PDF do atestado (em memória)
-    → pdfplumber extrai NUSP + Curso → Verifica elegibilidade (EESC?)
+    → httpx chama API REST da USP → PDF do atestado (em memória)
+    → pdfplumber extrai NUSP + Código de Curso + Unidade
+    → Verifica elegibilidade (cascata: curso → unidade → keywords)
     → HMAC-SHA256(NUSP, SALT_KEY) → Checa hash no banco → Voto duplicado?
     → Eleitor cria senha de auditoria
     → Registra hash (Tabela 1)
@@ -150,12 +154,12 @@ Aluno → Google OAuth (@usp.br) → Código de Controle do Júpiter
 | Componente | Tecnologia | Justificativa |
 |---|---|---|
 | **Backend** | Python 3.13 + FastAPI | Desenvolvimento rápido, validação automática, async nativo |
-| **Scraper** | Playwright (Chromium) | Único framework que consegue renderizar o SPA Vue.js do portal USP e lidar com Cloudflare Turnstile |
-| **Extração de PDF** | pdfplumber | Biblioteca madura para extração de texto de PDFs — a USP serve o atestado como PDF, não HTML |
-| **Criptografia** | HMAC-SHA256 (stdlib) | Algoritmo padrão da indústria, incluído na biblioteca padrão do Python, sem dependências externas |
-| **Banco de dados** | SQLite (WAL mode) | Arquivo local, zero configuração, leitores concorrentes via WAL. Suficiente para ~200-500 eleitores |
-| **Frontend** | Jinja2 + HTML/CSS/JS | Templates server-side, sem framework JavaScript — simplicidade e velocidade |
-| **Deploy** | PM2 + Cloudflare Tunnel | Process manager resiliente, sem portas expostas no roteador, WAF da Cloudflare protege contra DDoS |
+| **Scraper** | **httpx** (cliente HTTP assíncrono) | API REST direta do portal USP — 200ms vs ~30s com Playwright; sem Chromium |
+| **Extração de PDF** | pdfplumber | Biblioteca madura para extração de texto de PDFs |
+| **Criptografia** | HMAC-SHA256 (stdlib) | Algoritmo padrão da indústria, sem dependências externas |
+| **Banco de dados** | SQLite (WAL mode) | Arquivo local, zero configuração, leitores concorrentes via WAL |
+| **Frontend** | Jinja2 + HTML/CSS/JS | Templates server-side, sem framework JavaScript |
+| **Deploy** | PM2 + Cloudflare Tunnel | Process manager resiliente, WAF da Cloudflare protege contra DDoS |
 
 ---
 
@@ -172,7 +176,7 @@ source .venv/bin/activate
 
 # 3. Instalar dependências
 pip install -r requirements.txt
-playwright install chromium --with-deps
+# Playwright foi removido — httpx é a única dependência de scraping
 
 # 4. Configurar variáveis de ambiente
 cp .env.example .env
@@ -196,6 +200,7 @@ Todas as variáveis são configuráveis via `.env` — **nenhuma mudança de có
 | `VOTE_QUESTION` | Pergunta ao eleitor | `Você é a favor da greve?` |
 | `VOTE_OPTIONS` | Opções de voto (vírgula) | `Sim,Não,Nulo` |
 | `ELIGIBLE_UNIT_CODES` | Códigos de unidade USP | `97` (EESC) |
+| `ELIGIBLE_COURSE_CODES` | Códigos de curso USP (prioridade máxima) | `97001` ou `*` (wildcard) ou vazio |
 | `ELIGIBLE_KEYWORDS` | Keywords de elegibilidade | `Escola de Engenharia de São Carlos\|EESC` |
 | `SALT_KEY` | Chave HMAC deduplicação (**secreta**) | Token aleatório |
 | `SALT_2` | Chave HMAC auditoria (**secreta**) | Token aleatório (diferente de SALT_KEY) |
@@ -209,9 +214,9 @@ Todas as variáveis são configuráveis via `.env` — **nenhuma mudança de có
 Vote-Core/
 ├── app/
 │   ├── main.py          # Rotas FastAPI, rate limiter, orquestração
-│   ├── config.py        # Configurações via .env (pydantic-settings)
+│   ├── config.py        # Configurações via .env + PublicConfig (allowlist pública)
 │   ├── auth.py          # Google OAuth 2.0 + filtro @usp.br
-│   ├── scraper.py       # Playwright → Portal USP → PDF → Extração
+│   ├── scraper.py       # httpx → API REST USP → PDF → Extração + Elegibilidade
 │   ├── crypto.py        # HMAC-SHA256 — deduplicação + auditoria
 │   ├── database.py      # SQLite async — CRUD para as 3 tabelas
 │   ├── models.py        # Definição das 3 tabelas (zero foreign keys)
@@ -223,13 +228,17 @@ Vote-Core/
 │       ├── receipt.html  # Recibo com UUID
 │       ├── audit.html    # Auditoria pessoal NUSP + senha
 │       ├── results.html  # Resultados + tabela de transparência
+│       ├── config.html   # Configuração ativa (variáveis não-sensíveis)
+│       ├── guide.html    # Guia de uso
 │       └── error.html    # Página de erro
 ├── static/
 │   ├── style.css        # Dark theme com glassmorphism
 │   └── js/app.js        # JavaScript minimal
 ├── tests/
-│   └── test_core.py     # 26 testes (crypto, database, schema)
-├── ARCHITECTURE.md      # Documentação técnica completa
+│   ├── conftest.py      # Isola testes em banco :memory: (sem tocar votes.db)
+│   ├── test_core.py     # 53 testes (crypto, database, schema, elegibilidade, config)
+│   └── test_stress.py   # 28 testes de carga (concorrência, race conditions, rate limits)
+├── ARCHITECTURE.md      # Documentação técnica completa (v2.4)
 ├── requirements.txt     # Dependências Python
 ├── .env.example         # Template de variáveis de ambiente
 ├── ecosystem.config.js  # Configuração PM2
@@ -239,11 +248,12 @@ Vote-Core/
 ## Testes
 
 ```bash
-# Rodar a suite completa (26 testes)
+# Rodar a suite completa (81 testes)
 source .venv/bin/activate
 pytest tests/ -v
+# Os testes usam banco :memory: — nunca tocam o votes.db de produção
 
-# Cobertura: crypto (15), database (9), schema (2)
+# Cobertura: crypto (15), database (9), schema (7), scraper/elegibilidade (16), config (3), pragmas (3)
 ```
 
 ## Licença

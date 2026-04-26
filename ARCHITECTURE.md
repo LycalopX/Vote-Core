@@ -1,8 +1,8 @@
 # Vote-Core — Documentação Técnica Completa
 
 > **Sistema de votação eletrônica anônima e auditável para a EESC-USP.**
-> Versão: 2.3 (API httpx: Playwright removido + Hardening de Auditoria + Stress Tests)
-> Data: 22 de abril de 2026
+> Versão: 2.4 (Filtro de Curso + Wildcard + /config + Isolamento de Testes)
+> Data: 25 de abril de 2026
 > Autores: Alex (LycalopX), Eduardo Paiva (EduardoAPaiva), com assistência de IA
 
 ---
@@ -20,6 +20,7 @@
 9. [Testes](#9-testes)
 10. [Limitações Conhecidas](#10-limitações-conhecidas)
 11. [Histórico de Bugs Corrigidos](#11-histórico-de-bugs-corrigidos)
+12. [Changelog v2.5](#12-changelog-v25)
 
 ---
 
@@ -81,6 +82,8 @@ O sistema usa **duas chaves HMAC independentes**:
    - O PDF é baixado em memória (~200ms por request vs ~30s com Playwright)
    - Dados extraídos: NUSP, nome, curso, código de curso, unidade
    - Elegibilidade verificada em cascata: `ELIGIBLE_COURSE_CODES` → `ELIGIBLE_UNIT_CODES` → `ELIGIBLE_KEYWORDS`
+   - `ELIGIBLE_COURSE_CODES=*` pula a verificação de curso e cai nas etapas seguintes (wildcard)
+   - `ELIGIBLE_COURSE_CODES=97001` (lista) → verifica apenas o código numérico; unidade e keywords ignoradas
    - Nenhum dado pessoal (RG, nome completo) é extraído ou armazenado
 
 ---
@@ -264,8 +267,25 @@ Fluxo:
 2. `GET /proxy/wsportal/id-digital/versao-documentos/{code}` — verifica se há versão mais nova do documento
 3. `GET /proxy/wsportal/id-digital/documentos/{code_atual}` — baixa o PDF em memória
 4. Extrai dados via regex: `NUSP_PATTERN`, `CURSO_PATTERN`, `COURSE_CODE_PATTERN`, `UNIDADE_PATTERN`
-5. **RG não é extraído** — removido por ser dado pessoal desnecessário
-6. `_check_eligibility()` — verifica filtros em cascata
+5. **RG não é extraído** — campo `rg` removido de `DocumentData` (dado pessoal desnecessário)
+6. `_check_eligibility(text, course_code, settings)` — verifica filtros em cascata:
+   - `ELIGIBLE_COURSE_CODES` = lista → compara `course_code` extraído do PDF; retorna imediatamente
+   - `ELIGIBLE_COURSE_CODES` = `*` → pula verificação de curso (wildcard); `eligible_course_codes_list` retorna `None`
+   - `ELIGIBLE_COURSE_CODES` = vazio → cai em `ELIGIBLE_UNIT_CODES`
+   - `ELIGIBLE_UNIT_CODES` = lista → regex `\b{code}\s*-` no texto
+   - `ELIGIBLE_KEYWORDS` = lista → substring case-insensitive no texto
+   - Nenhum filtro configurado → aceita qualquer aluno
+
+**`DocumentData`** (dataclass):
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `nusp` | `str` | Número USP (7–8 dígitos) — chave de deduplicação |
+| `curso` | `str` | Nome do curso (ex: "Engenharia de Computação") |
+| `course_code` | `str` | Código numérico do curso (ex: "97001") |
+| `unidade` | `str` | Nome da unidade (ex: "Escola de Engenharia de São Carlos") |
+| `nome` | `str` | Nome do aluno |
+| `is_eligible` | `bool` | Resultado da verificação de elegibilidade |
 
 **Vantagens sobre o Playwright anterior**:
 
@@ -294,7 +314,7 @@ CRUD assíncrono para as 3 tabelas. Destaque:
 - `get_vote_by_audit_id()` lê da **Tabela 2** (restrita) — única função que toca o audit_id
 - Pragmas configurados via listener `set_sqlite_pragma()`: WAL, busy_timeout=15s, autocheckpoint=1000
 
-### 5.5 `app/main.py` (~550 linhas)
+### 5.5 `app/main.py` (~720 linhas)
 
 FastAPI app com as rotas:
 
@@ -305,10 +325,26 @@ FastAPI app com as rotas:
 | `/auth/callback` | GET | Público | Callback OAuth |
 | `/validate` | GET/POST | Autenticado | Validação de matrícula |
 | `/vote` | GET/POST | Autenticado + validado | Tela de votação |
-| `/receipt` | GET | Pós-voto | Recibo com UUID |
+| `/receipt/{uuid}` | GET | Pós-voto | Recibo com UUID |
 | `/audit` | GET/POST | Público | Auditoria pessoal |
 | `/results` | GET | Público | Resultados + tabela de transparência |
+| `/guide` | GET | Público | Guia de uso |
+| `/config` | GET | Público | Configuração ativa (variáveis não-sensíveis) |
 | `/health` | GET | Público | Health check |
+
+### 5.6 `app/config.py` — `PublicConfig`
+
+Além de `Settings` (Pydantic BaseSettings), o módulo exporta `PublicConfig`: um `dataclass(frozen=True)` que define uma **allowlist explícita** de campos não-sensíveis para a rota `/config`.
+
+```
+Settings  →  PublicConfig.from_settings()  →  template config.html
+           (único ponto de extração)          (recebe APENAS PublicConfig)
+```
+
+- `SECRET_KEY`, `SALT_KEY`, `SALT_2`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` **não existem** em `PublicConfig`
+- O template recebe somente o objeto `PublicConfig` — `settings` é omitido do contexto
+- Mesmo que alguém tente `{{ config.SECRET_KEY }}` no template, Jinja2 retorna string vazia (campo inexistente)
+- A proteção é **estrutural** (tipo de dados), não convencional
 
 ---
 
@@ -386,7 +422,8 @@ Ambos os endpoints aceitam qualquer valor no header `g-recaptcha-token` — o Tu
 | MIME-type sniffing | `X-Content-Type-Options: nosniff` | ✅ Implementado |
 | Downgrade HTTP | `Strict-Transport-Security: max-age=31536000` (produção) | ✅ Implementado |
 | XSS injection | CSP restritiva + Jinja2 auto-escape + `X-XSS-Protection` | ✅ Implementado |
-| Aluno de outra unidade (ICMC) | Filtro por `ELIGIBLE_COURSE_CODES` (97001-97008) com prioridade sobre unidade | ✅ Implementado |
+| Aluno de outra unidade (ICMC) | Filtro por `ELIGIBLE_COURSE_CODES` (ex: `97001`) com cascata de prioridade; `*` para aceitar qualquer curso | ✅ Implementado |
+| Exposição de dados sensíveis em `/config` | `PublicConfig` frozen dataclass como allowlist — `SECRET_KEY`/`SALT_*` não existem no tipo | ✅ Implementado |
 | Database locked em pico | `PRAGMA busy_timeout=15000` — espera 15s antes de falhar | ✅ Implementado |
 | Vazamento de dados pessoais | RG removido do código; NUSP/nome não logados; PDF nunca salvo em disco | ✅ Implementado |
 | Cache de CSS antigo | Cache-busting via `?v=N` no link do CSS | ✅ Implementado |
@@ -421,7 +458,11 @@ VOTE_TITLE=Assembleia EESC-USP — Greve 2026
 VOTE_QUESTION=Você é a favor da greve?
 VOTE_OPTIONS=Sim,Não,Nulo
 ELIGIBLE_UNIT_CODES=97
-ELIGIBLE_COURSE_CODES=97001,97002,97003,97004,97005,97006,97007,97008
+# Lista de códigos de curso (prioridade máxima na cascata de elegibilidade):
+# - Use uma lista: 97001,97002  → aceita apenas esses cursos
+# - Use * (wildcard)            → pula verificação de curso, cai em unidade/keywords
+# - Deixe vazio                 → não usa filtro de curso (cai em unidade/keywords)
+ELIGIBLE_COURSE_CODES=97001
 ELIGIBLE_KEYWORDS=Escola de Engenharia de São Carlos|EESC
 ```
 
@@ -531,13 +572,14 @@ gemini/                 # Conversas de desenvolvimento com IA
 - Lista de cursos aceita se pelo menos um dá match
 - Keyword match e no-match
 
-### Config — propriedades computadas (2 testes)
+### Config — propriedades computadas (3 testes)
 - `eligible_course_codes_list` vazio → lista vazia
 - `eligible_course_codes_list` com valores → lista correta
+- `eligible_course_codes_list` com `*` → retorna `None` (wildcard)
 
 ### SQLite — pragmas de segurança (3 testes)
 - `busy_timeout >= 15000ms` (anti-database-locked)
-- `journal_mode = wal`
+- `journal_mode = wal` (ou `memory` em banco :memory: de testes — ambos aceitos)
 - `wal_autocheckpoint = 1000`
 
 ### Stress Tests (28 novos testes — `tests/test_stress.py`)
@@ -556,8 +598,10 @@ gemini/                 # Conversas de desenvolvimento com IA
 ```bash
 # Executar todos os testes
 pytest tests/ -v
-# Resultado: 78 passed in ~2s
+# Resultado: 81 passed in ~1.3s
 ```
+
+**Isolamento do banco**: `tests/conftest.py` (session-scoped) substitui `database._get_engine` por um engine `sqlite+aiosqlite:///:memory:`. Os testes nunca tocam no `votes.db` de produção e não deixam resíduos entre runs.
 
 **Configuração**: `pytest.ini` com `asyncio_mode=auto` e `asyncio_default_test_loop_scope=module` — necessário para que o engine SQLAlchemy (criado no event loop do módulo) seja compartilhado pelos testes assíncronos.
 
@@ -589,6 +633,8 @@ pytest tests/ -v
 | Sem filtro por curso (ICMC podia votar) | ✅ `ELIGIBLE_COURSE_CODES` com prioridade sobre unidade |
 | RG extraído sem necessidade | ✅ `RG_PATTERN` e campo `rg` removidos completamente |
 | Sem security headers HTTP | ✅ 6 headers: CSP, HSTS, X-Frame-Options, etc. |
+| Sem página de inspeção de configuração | ✅ Rota `/config` com `PublicConfig` — mostra vars não-sensíveis, oculta chaves secretas por design |
+| Testes escreviam no banco de produção | ✅ `conftest.py` redireciona todos os testes para banco `:memory:` |
 
 ---
 
@@ -647,3 +693,42 @@ pytest tests/ -v
 - **Sintoma**: `IntegrityError: UNIQUE constraint failed: votes.audit_id` ao rodar os testes duas vezes sem limpar o banco
 - **Causa**: Stress tests usavam strings fixas como `"stress_voter_aaaa...000"` e `"race_condition_xxx..."`
 - **Fix**: Todos os dados de teste usam `uuid.uuid4()` para garantir unicidade entre runs
+
+### Bug 12: `_check_eligibility` ignorava completamente `ELIGIBLE_COURSE_CODES` (CRÍTICO)
+- **Sintoma**: Alunos do ICMC (unidade 97, mas curso diferente de `97001`) conseguiam votar mesmo com `ELIGIBLE_COURSE_CODES=97001` configurado no `.env`
+- **Causa**: `_check_eligibility` verificava apenas `eligible_unit_codes_list` e `eligible_keywords_list`. O campo `ELIGIBLE_COURSE_CODES` existia no `.env` e em `config.py`, mas **nunca era consultado** na lógica de elegibilidade
+- **Fix**:
+  - Adicionado `COURSE_CODE_PATTERN = re.compile(r"Curso[:\s]+(\d{4,6})\s*-")` ao scraper
+  - Campo `course_code: str` adicionado a `DocumentData` (campo `rg` removido simultaneamente)
+  - `extract_data_from_pdf` extrai o código numérico e passa para `_check_eligibility`
+  - `_check_eligibility` reescrita com cascata de prioridade: `course_codes` → `unit_codes` → `keywords` → aceita todos
+  - `eligible_course_codes_list` retorna `None` para `*` (wildcard — pula verificação de curso)
+
+### Bug 13: Testes usando banco de produção (`votes.db`)
+- **Sintoma**: `IntegrityError: UNIQUE constraint failed: votes.audit_id` ao rodar testes pela segunda vez (mesmo com dados não-repetidos no código-fonte)
+- **Causa**: Sem `conftest.py`, os testes usavam `DATABASE_URL` do `.env` real — o banco em disco acumulava dados de runs anteriores. Strings hardcoded como `"audit_" + "x" * 60` colidiam na segunda execução
+- **Fix**: `tests/conftest.py` com fixture `session`-scoped que substitui `database._get_engine` por um engine `sqlite+aiosqlite:///:memory:`. O banco em memória é descartado ao fim de cada `pytest`. Resultado: **81/81 testes passando** de forma determinística e repetível
+
+---
+
+## 12. Changelog v2.4
+
+**Data**: 25 de abril de 2026
+
+### Novos recursos
+- **Cascata de elegibilidade por código de curso** (`ELIGIBLE_COURSE_CODES`): agora efetivamente aplicada com prioridade máxima sobre unidade e keywords
+- **Wildcard `*`** para `ELIGIBLE_COURSE_CODES`: pula verificação de curso e cai nas etapas seguintes
+- **Rota `/config`**: página pública que exibe variáveis não-sensíveis do ambiente ativo (título, elegibilidade, rate limits, infraestrutura). Acessível sem login
+- **`PublicConfig`** (frozen dataclass): allowlist estrutural de dados públicos — `SECRET_KEY`, `SALT_*` e credenciais OAuth são fisicamente ausentes do tipo e não podem vazar para templates
+
+### Correções
+- `_check_eligibility` agora verifica `ELIGIBLE_COURSE_CODES` corretamente (era ignorado)
+- `DocumentData` removeu campo `rg` (dado pessoal desnecessário) e adicionou `course_code`
+- Testes isolados do banco de produção via `tests/conftest.py` (banco `:memory:`)
+- `test_pragma_journal_mode_wal` aceita `'memory'` em ambientes de teste (SQLite `:memory:` não suporta WAL)
+
+### Commits desta versão
+- `d447717` — fix: implement ELIGIBLE_COURSE_CODES enforcement in eligibility check
+- `09127e3` — feat: add wildcard '*' support for ELIGIBLE_COURSE_CODES
+- `271e5f1` — feat: add /config page + fix test isolation
+- `65cc3c7` — refactor(config): introduce PublicConfig allowlist for /config page
