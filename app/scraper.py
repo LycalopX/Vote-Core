@@ -190,16 +190,22 @@ def _check_eligibility(text: str, course_code: str, settings) -> bool:
     Verifica se o aluno é elegível baseado nos critérios do .env.
 
     Cascata de prioridade:
-    1. Se ELIGIBLE_COURSE_CODES estiver definido → usa APENAS o código numérico
-       do curso (ex: '97001'). Unidade e keywords são ignoradas.
-    2. Se ELIGIBLE_COURSE_CODES vazio → checa ELIGIBLE_UNIT_CODES no texto.
-    3. Se ELIGIBLE_UNIT_CODES vazio → checa ELIGIBLE_KEYWORDS no texto.
-    4. Se nenhum filtro definido → aceita qualquer aluno.
+    1. ELIGIBLE_COURSE_CODES='*'       → pula verificação de curso (wildcard),
+                                         cai nas verificações de unidade/keywords.
+    2. ELIGIBLE_COURSE_CODES=<lista>   → usa APENAS o código numérico do curso.
+                                         Unidade e keywords são ignoradas.
+    3. ELIGIBLE_COURSE_CODES vazio     → checa ELIGIBLE_UNIT_CODES no texto.
+    4. ELIGIBLE_UNIT_CODES vazio       → checa ELIGIBLE_KEYWORDS no texto.
+    5. Nenhum filtro definido          → aceita qualquer aluno.
     """
 
-    # ── Prioridade 1: filtro por código de curso ──
-    if settings.eligible_course_codes_list:
-        return course_code in settings.eligible_course_codes_list
+    # ── Prioridade 1/2: filtro por código de curso ──
+    course_codes = settings.eligible_course_codes_list
+    # None = wildcard ('*') → pula para unidade/keywords
+    # []   = não configurado → pula para unidade/keywords
+    # [..] = lista definida  → verifica e retorna imediatamente
+    if course_codes is not None and len(course_codes) > 0:
+        return course_code in course_codes
 
     # ── Prioridade 2: filtro por código de unidade ──
     if settings.eligible_unit_codes_list:

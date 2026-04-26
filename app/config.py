@@ -38,7 +38,8 @@ class Settings(BaseSettings):
 
     # Códigos de curso USP elegíveis (separados por vírgula)
     # Filtro mais fino que unidade — EESC e ICMC compartilham unidade 97
-    # Deixe vazio para aceitar qualquer curso da unidade elegível
+    # Use '*' para aceitar qualquer curso (pula verificação de curso completamente)
+    # Deixe vazio para não usar filtro de curso e cair no filtro de unidade
     # Ex: 97001 = Eng. Computação, 97002 = Eng. Elétrica/Eletrônica, etc.
     ELIGIBLE_COURSE_CODES: str = ""
 
@@ -60,11 +61,19 @@ class Settings(BaseSettings):
         return [code.strip() for code in self.ELIGIBLE_UNIT_CODES.split(",")]
 
     @property
-    def eligible_course_codes_list(self) -> list[str]:
-        """Retorna a lista de códigos de curso elegíveis."""
-        if not self.ELIGIBLE_COURSE_CODES.strip():
+    def eligible_course_codes_list(self) -> list[str] | None:
+        """
+        Retorna a lista de códigos de curso elegíveis.
+
+        Retorna None quando ELIGIBLE_COURSE_CODES='*' (wildcard — pula verificação de curso).
+        Retorna [] quando não configurado (nenhum filtro de curso ativo).
+        """
+        raw = self.ELIGIBLE_COURSE_CODES.strip()
+        if raw == "*":
+            return None  # wildcard: pula verificação de curso
+        if not raw:
             return []
-        return [code.strip() for code in self.ELIGIBLE_COURSE_CODES.split(",")]
+        return [code.strip() for code in raw.split(",")]
 
     @property
     def eligible_keywords_list(self) -> list[str]:

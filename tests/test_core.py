@@ -349,7 +349,13 @@ class FakeSettings:
     """Mock de Settings para testes de elegibilidade."""
     def __init__(self, units="", courses="", keywords=""):
         self.eligible_unit_codes_list = [c.strip() for c in units.split(",") if c.strip()] if units else []
-        self.eligible_course_codes_list = [c.strip() for c in courses.split(",") if c.strip()] if courses else []
+        # Espelha o contrato real: None = wildcard ('*'), [] = vazio, lista = filtro ativo
+        if courses == "*":
+            self.eligible_course_codes_list = None
+        elif courses:
+            self.eligible_course_codes_list = [c.strip() for c in courses.split(",") if c.strip()]
+        else:
+            self.eligible_course_codes_list = []
         self.eligible_keywords_list = [k.strip() for k in keywords.split("|") if k.strip()] if keywords else []
 
 
@@ -412,6 +418,24 @@ def test_eligibility_keyword_no_match():
     assert _check_eligibility(SAMPLE_PDF_TEXT, "97001", FakeSettings(keywords="EESC")) is False
 
 
+def test_eligibility_course_wildcard_aceita_qualquer_curso():
+    """ELIGIBLE_COURSE_CODES='*' deve aceitar qualquer curso (pula verificação)."""
+    # Mesmo com um curso diferente do que está no texto, wildcard aceita tudo
+    assert _check_eligibility(SAMPLE_PDF_TEXT, "99999", FakeSettings(courses="*")) is True
+
+
+def test_eligibility_course_wildcard_cai_em_keywords():
+    """Com wildcard em curso, o filtro de keywords ainda deve ser aplicado."""
+    # keyword errada → bloqueado mesmo com wildcard no curso
+    assert _check_eligibility(
+        SAMPLE_PDF_TEXT, "97001", FakeSettings(courses="*", keywords="ICMC")
+    ) is False
+    # keyword certa → aceito
+    assert _check_eligibility(
+        SAMPLE_PDF_TEXT, "97001", FakeSettings(courses="*", keywords="Engenharia de Computação")
+    ) is True
+
+
 # ─── Config: propriedades computadas ─────────────────────────────
 
 from app.config import Settings
@@ -433,6 +457,15 @@ def test_config_eligible_course_codes_list_com_valores():
         ELIGIBLE_COURSE_CODES="97001,97002", _env_file=None,
     )
     assert s.eligible_course_codes_list == ["97001", "97002"]
+
+
+def test_config_eligible_course_codes_list_wildcard():
+    """ELIGIBLE_COURSE_CODES='*' retorna None (wildcard — pula verificação de curso)."""
+    s = Settings(
+        SECRET_KEY="x", SALT_KEY="y", SALT_2="z",
+        ELIGIBLE_COURSE_CODES="*", _env_file=None,
+    )
+    assert s.eligible_course_codes_list is None
 
 
 # ─── Database: pragmas SQLite ────────────────────────────────────
