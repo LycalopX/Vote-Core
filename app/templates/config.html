@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+{% block title %}Configuração — Urna EESC{% endblock %}
+
+{% block content %}
+<div class="page-card config-page">
+    <div class="config-header">
+        <div class="config-icon">⚙️</div>
+        <h1 class="config-title">Configuração Ativa</h1>
+        <p class="config-subtitle">
+            Variáveis não-sensíveis do ambiente de execução atual.
+            Chaves secretas (<code>SECRET_KEY</code>, <code>SALT_*</code>) são omitidas.
+        </p>
+    </div>
+
+    <div class="config-sections">
+
+        <!-- Votação -->
+        <section class="config-section">
+            <h2 class="section-label">🗳️ Votação</h2>
+            <div class="config-table">
+                <div class="config-row">
+                    <span class="config-key">VOTE_TITLE</span>
+                    <span class="config-value">{{ config.vote_title }}</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">VOTE_QUESTION</span>
+                    <span class="config-value">{{ config.vote_question }}</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">VOTE_OPTIONS</span>
+                    <span class="config-value">
+                        {% for opt in config.vote_options %}
+                            <span class="badge">{{ opt }}</span>
+                        {% endfor %}
+                    </span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Elegibilidade -->
+        <section class="config-section">
+            <h2 class="section-label">🎓 Elegibilidade</h2>
+            <div class="config-table">
+                <div class="config-row">
+                    <span class="config-key">ELIGIBLE_COURSE_CODES</span>
+                    <span class="config-value">
+                        {% if config.course_codes_raw == "*" %}
+                            <span class="badge badge-warn">* (wildcard — qualquer curso)</span>
+                        {% elif config.course_codes_raw %}
+                            {% for code in config.course_codes %}
+                                <span class="badge">{{ code }}</span>
+                            {% endfor %}
+                        {% else %}
+                            <span class="config-empty">não configurado</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">ELIGIBLE_UNIT_CODES</span>
+                    <span class="config-value">
+                        {% if config.unit_codes %}
+                            {% for code in config.unit_codes %}
+                                <span class="badge">{{ code }}</span>
+                            {% endfor %}
+                        {% else %}
+                            <span class="config-empty">não configurado</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">ELIGIBLE_KEYWORDS</span>
+                    <span class="config-value">
+                        {% if config.keywords %}
+                            {% for kw in config.keywords %}
+                                <span class="badge badge-secondary">{{ kw }}</span>
+                            {% endfor %}
+                        {% else %}
+                            <span class="config-empty">não configurado</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">Cascata ativa</span>
+                    <span class="config-value config-cascade">
+                        {% if config.course_codes_raw == "*" %}
+                            <span class="cascade-step cascade-skip">Curso <em>(wildcard)</em></span>
+                            <span class="cascade-arrow">→</span>
+                        {% elif config.course_codes %}
+                            <span class="cascade-step cascade-active">Curso</span>
+                            <span class="cascade-arrow">→ <em>fim</em></span>
+                        {% else %}
+                        {% endif %}
+                        {% if not config.course_codes_raw or config.course_codes_raw == "*" %}
+                            {% if config.unit_codes %}
+                                <span class="cascade-step cascade-active">Unidade</span>
+                                <span class="cascade-arrow">→</span>
+                            {% endif %}
+                            {% if config.keywords %}
+                                <span class="cascade-step cascade-active">Keywords</span>
+                            {% endif %}
+                            {% if not config.unit_codes and not config.keywords %}
+                                <span class="cascade-step cascade-warn">Aceita todos</span>
+                            {% endif %}
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Infraestrutura -->
+        <section class="config-section">
+            <h2 class="section-label">🖥️ Infraestrutura</h2>
+            <div class="config-table">
+                <div class="config-row">
+                    <span class="config-key">BASE_URL</span>
+                    <span class="config-value config-mono">{{ config.base_url }}</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">DATABASE_URL</span>
+                    <span class="config-value config-mono">{{ config.database_url }}</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">DEBUG</span>
+                    <span class="config-value">
+                        {% if config.debug %}
+                            <span class="badge badge-warn">ATIVADO</span>
+                        {% else %}
+                            <span class="badge badge-ok">DESATIVADO</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">Google OAuth</span>
+                    <span class="config-value">
+                        {% if config.oauth_configured %}
+                            <span class="badge badge-ok">configurado</span>
+                        {% else %}
+                            <span class="badge badge-error">não configurado</span>
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Rate Limits -->
+        <section class="config-section">
+            <h2 class="section-label">🛡️ Rate Limits</h2>
+            <div class="config-table">
+                <div class="config-row">
+                    <span class="config-key">/validate (por IP)</span>
+                    <span class="config-value">{{ config.rate_validate_max }} tentativas / {{ config.rate_validate_window }}s</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">/audit (por NUSP)</span>
+                    <span class="config-value">{{ config.rate_audit_max }} tentativas / {{ config.rate_audit_window }}s</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">/audit (por IP)</span>
+                    <span class="config-value">{{ config.rate_audit_ip_max }} tentativas / {{ config.rate_audit_ip_window }}s</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-key">Scrapers concorrentes</span>
+                    <span class="config-value">{{ config.max_concurrent_scrapers }}</span>
+                </div>
+            </div>
+        </section>
+
+    </div>
+
+    <div class="config-footer">
+        <a href="/" class="btn btn-ghost">← Voltar</a>
+    </div>
+</div>
+
+<style>
+.config-page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2.5rem;
+}
+
+.config-header {
+    text-align: center;
+    margin-bottom: 2.5rem;
+}
+
+.config-icon {
+    font-size: 3rem;
+    margin-bottom: 0.75rem;
+    display: block;
+}
+
+.config-title {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent-light, #818cf8));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.config-subtitle {
+    color: var(--text-muted, #94a3b8);
+    font-size: 0.9rem;
+    max-width: 480px;
+    margin: 0 auto;
+    line-height: 1.6;
+}
+
+.config-subtitle code {
+    background: rgba(99,102,241,0.15);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.config-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.config-section {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.section-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted, #94a3b8);
+    padding: 0.85rem 1.25rem 0.6rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    margin: 0;
+}
+
+.config-table {
+    padding: 0.25rem 0;
+}
+
+.config-row {
+    display: flex;
+    align-items: flex-start;
+    padding: 0.7rem 1.25rem;
+    gap: 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: background 0.15s;
+}
+
+.config-row:last-child {
+    border-bottom: none;
+}
+
+.config-row:hover {
+    background: rgba(255,255,255,0.03);
+}
+
+.config-key {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent, #6366f1);
+    min-width: 200px;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+
+.config-value {
+    font-size: 0.88rem;
+    color: var(--text, #e2e8f0);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.config-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-muted, #94a3b8);
+    word-break: break-all;
+}
+
+.config-empty {
+    color: var(--text-muted, #94a3b8);
+    font-style: italic;
+    font-size: 0.83rem;
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.2em 0.65em;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background: rgba(99,102,241,0.18);
+    color: #a5b4fc;
+    border: 1px solid rgba(99,102,241,0.25);
+}
+
+.badge-secondary {
+    background: rgba(148,163,184,0.12);
+    color: #94a3b8;
+    border-color: rgba(148,163,184,0.2);
+}
+
+.badge-warn {
+    background: rgba(245,158,11,0.15);
+    color: #fbbf24;
+    border-color: rgba(245,158,11,0.25);
+}
+
+.badge-ok {
+    background: rgba(34,197,94,0.12);
+    color: #4ade80;
+    border-color: rgba(34,197,94,0.2);
+}
+
+.badge-error {
+    background: rgba(239,68,68,0.12);
+    color: #f87171;
+    border-color: rgba(239,68,68,0.2);
+}
+
+.config-cascade {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.cascade-step {
+    padding: 0.2em 0.65em;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.cascade-active {
+    background: rgba(34,197,94,0.12);
+    color: #4ade80;
+    border: 1px solid rgba(34,197,94,0.2);
+}
+
+.cascade-skip {
+    background: rgba(148,163,184,0.1);
+    color: #94a3b8;
+    border: 1px solid rgba(148,163,184,0.15);
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.cascade-warn {
+    background: rgba(245,158,11,0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(245,158,11,0.25);
+}
+
+.cascade-arrow {
+    color: var(--text-muted, #94a3b8);
+    font-size: 0.8rem;
+}
+
+.config-footer {
+    margin-top: 2rem;
+    text-align: center;
+}
+</style>
+{% endblock %}

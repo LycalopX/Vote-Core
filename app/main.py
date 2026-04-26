@@ -11,6 +11,7 @@ Rotas:
   /receipt/{uuid}     Recibo público de auditoria
   /audit              Auditoria pessoal via NUSP + senha
   /results            Contagem pública dos votos
+  /config             Variáveis não-sensíveis do ambiente ativo
 """
 
 import logging
@@ -657,6 +658,50 @@ async def guide_page(request: Request):
         {
             "user": user,
             "settings": settings,
+        },
+    )
+
+
+@app.get("/config", response_class=HTMLResponse)
+async def config_page(request: Request):
+    """Exibe as variáveis não-sensíveis do ambiente de execução atual."""
+    user = get_current_user(request)
+
+    course_codes_raw = settings.ELIGIBLE_COURSE_CODES.strip()
+    course_codes_list = settings.eligible_course_codes_list  # None | [] | [str]
+
+    config_data = {
+        # ── Votação ────────────────────────────────────────────
+        "vote_title": settings.VOTE_TITLE,
+        "vote_question": settings.VOTE_QUESTION,
+        "vote_options": settings.vote_options_list,
+        # ── Elegibilidade ───────────────────────────────────
+        "course_codes_raw": course_codes_raw,
+        "course_codes": course_codes_list or [],
+        "unit_codes": settings.eligible_unit_codes_list,
+        "keywords": settings.eligible_keywords_list,
+        # ── Infraestrutura ────────────────────────────────
+        "base_url": settings.BASE_URL,
+        "database_url": settings.DATABASE_URL,
+        "debug": settings.DEBUG,
+        "oauth_configured": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET),
+        # ── Rate Limits (constantes do módulo) ─────────────────
+        "rate_validate_max": RATE_LIMIT_MAX_ATTEMPTS,
+        "rate_validate_window": RATE_LIMIT_WINDOW_SECONDS,
+        "rate_audit_max": AUDIT_RATE_LIMIT_MAX,
+        "rate_audit_window": AUDIT_RATE_LIMIT_WINDOW,
+        "rate_audit_ip_max": AUDIT_IP_RATE_LIMIT_MAX,
+        "rate_audit_ip_window": AUDIT_IP_RATE_LIMIT_WINDOW,
+        "max_concurrent_scrapers": MAX_CONCURRENT_SCRAPERS,
+    }
+
+    return templates.TemplateResponse(
+        request,
+        "config.html",
+        {
+            "user": user,
+            "settings": settings,
+            "config": config_data,
         },
     )
 
