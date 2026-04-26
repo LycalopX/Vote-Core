@@ -10,7 +10,7 @@ Sistema de votação eletrônica **anônimo**, **seguro** e **auditável** para 
 
 A votação presencial em assembleia tem dois problemas conhecidos: (1) quem não pode comparecer não vota, e (2) a contagem manual é suscetível a erros e contestações. Uma urna eletrônica resolve ambos — mas introduz uma preocupação legítima: **como garantir que o sistema é honesto?**
 
-Este documento explica, decisão por decisão, como o sistema foi projetado para ser **matematicamente impossível de fraudar ou violar a privacidade do eleitor**, mesmo por quem tem acesso total ao servidor.
+Este documento explica, decisão por decisão, como o sistema foi projetado para **proteger a privacidade do eleitor e garantir que cada eleitor possa verificar o seu próprio voto**.
 
 Para detalhes técnicos aprofundados (schema do banco, fluxo HTTP, vetores de ataque, decisões de design), veja [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
@@ -95,11 +95,9 @@ Antes de registrar o voto, o sistema verifica: **esse hash já existe no banco?*
 
 **Dois SALTs independentes**: `SALT_KEY` (deduplicação) e `SALT_2` (auditoria) são chaves separadas. Comprometer uma não compromete a outra.
 
-### 6. Transparência total — Tabela pública de votos
+### 6. Cada voto é verificável na tabela pública
 
-**O problema**: Como garantir que nenhum voto foi alterado ou removido após o registro?
-
-**A solução**: A rota `/results` exibe **todos os votos individuais** (UUID + opção), lidos da Tabela 3 (`public_votes`). Qualquer eleitor pode:
+**O que o sistema garante**: Qualquer eleitor pode verificar que o seu próprio voto foi registrado corretamente:
 - Ver a lista completa de todos os votos registrados
 - Localizar seu próprio UUID na tabela
 - Confirmar que seu voto está correto

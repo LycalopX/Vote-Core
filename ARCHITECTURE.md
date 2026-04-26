@@ -30,9 +30,9 @@ Vote-Core é um sistema web de votação eletrônica construído para assembleia
 
 - **Anonimato matemático**: Impossível correlacionar "quem votou" com "qual voto"
 - **Deduplicação**: Cada aluno só vota uma vez (verificado via HMAC do NUSP)
-- **Auditabilidade**: O eleitor pode verificar seu próprio voto a qualquer momento
+- **Auditabilidade individual**: O eleitor pode verificar o seu próprio voto a qualquer momento
 - **Transparência**: Todos os votos são listados publicamente (uuid + voto)
-- **Elegibilidade**: Apenas alunos da EESC com matrícula ativa podem votar
+- **Elegibilidade**: O fluxo de admissão valida email `@usp.br` + atestado de matrícula antes de aceitar cada voto
 
 ### Stack Tecnológica
 
