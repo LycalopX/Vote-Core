@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.config import get_settings
+from app.config import get_settings, PublicConfig
 from app.auth import setup_oauth, login, callback, logout, get_current_user, RedirectRequired
 from app.crypto import generate_voter_hash, generate_audit_id
 from app.database import (
@@ -667,41 +667,26 @@ async def config_page(request: Request):
     """Exibe as variáveis não-sensíveis do ambiente de execução atual."""
     user = get_current_user(request)
 
-    course_codes_raw = settings.ELIGIBLE_COURSE_CODES.strip()
-    course_codes_list = settings.eligible_course_codes_list  # None | [] | [str]
-
-    config_data = {
-        # ── Votação ────────────────────────────────────────────
-        "vote_title": settings.VOTE_TITLE,
-        "vote_question": settings.VOTE_QUESTION,
-        "vote_options": settings.vote_options_list,
-        # ── Elegibilidade ───────────────────────────────────
-        "course_codes_raw": course_codes_raw,
-        "course_codes": course_codes_list or [],
-        "unit_codes": settings.eligible_unit_codes_list,
-        "keywords": settings.eligible_keywords_list,
-        # ── Infraestrutura ────────────────────────────────
-        "base_url": settings.BASE_URL,
-        "database_url": settings.DATABASE_URL,
-        "debug": settings.DEBUG,
-        "oauth_configured": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET),
-        # ── Rate Limits (constantes do módulo) ─────────────────
-        "rate_validate_max": RATE_LIMIT_MAX_ATTEMPTS,
-        "rate_validate_window": RATE_LIMIT_WINDOW_SECONDS,
-        "rate_audit_max": AUDIT_RATE_LIMIT_MAX,
-        "rate_audit_window": AUDIT_RATE_LIMIT_WINDOW,
-        "rate_audit_ip_max": AUDIT_IP_RATE_LIMIT_MAX,
-        "rate_audit_ip_window": AUDIT_IP_RATE_LIMIT_WINDOW,
-        "max_concurrent_scrapers": MAX_CONCURRENT_SCRAPERS,
-    }
+    # PublicConfig é o único objeto com acesso a settings aqui.
+    # O template recebe apenas public_config — settings não é passado.
+    public_config = PublicConfig.from_settings(
+        settings,
+        rate_validate_max=RATE_LIMIT_MAX_ATTEMPTS,
+        rate_validate_window=RATE_LIMIT_WINDOW_SECONDS,
+        rate_audit_max=AUDIT_RATE_LIMIT_MAX,
+        rate_audit_window=AUDIT_RATE_LIMIT_WINDOW,
+        rate_audit_ip_max=AUDIT_IP_RATE_LIMIT_MAX,
+        rate_audit_ip_window=AUDIT_IP_RATE_LIMIT_WINDOW,
+        max_concurrent_scrapers=MAX_CONCURRENT_SCRAPERS,
+    )
 
     return templates.TemplateResponse(
         request,
         "config.html",
         {
             "user": user,
-            "settings": settings,
-            "config": config_data,
+            "config": public_config,
+            # Nota: 'settings' intencionalmente ausente neste contexto.
         },
     )
 

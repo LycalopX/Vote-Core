@@ -8,6 +8,7 @@ são carregadas do .env para facilitar modificação sem alterar código.
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 from functools import lru_cache
+from dataclasses import dataclass
 
 
 class Settings(BaseSettings):
@@ -93,3 +94,88 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Singleton das configurações. Cached para performance."""
     return Settings()
+
+
+# ─── Configuração pública (sem dados sensíveis) ────────────────────
+
+@dataclass(frozen=True)
+class PublicConfig:
+    """
+    Subconjunto EXPLICITAMENTE não-sensível das configurações.
+
+    Único objeto permitido de ser passado ao template /config.
+    Por ser frozen e ter campos nomeados individualmente, é impossível
+    expor acidentalmente SECRET_KEY, SALT_* ou credenciais OAuth.
+
+    Regra de ouro: se um campo não está aqui, o template não pode vê-lo.
+    """
+
+    # ── Votação ──────────────────────────────────────────────
+    vote_title: str
+    vote_question: str
+    vote_options: list[str]
+
+    # ── Elegibilidade ───────────────────────────────────────
+    course_codes_raw: str           # valor bruto (pode ser '*', lista, ou '')
+    course_codes: list[str]         # lista processada ([] se wildcard ou vazio)
+    unit_codes: list[str]
+    keywords: list[str]
+
+    # ── Infraestrutura (não-sensível) ──────────────────────────
+    base_url: str
+    database_url: str               # caminho do arquivo, sem credenciais
+    debug: bool
+    oauth_configured: bool          # booleano — nunca o client_id/secret
+
+    # ── Rate Limits (constantes de código) ──────────────────────
+    rate_validate_max: int
+    rate_validate_window: int
+    rate_audit_max: int
+    rate_audit_window: int
+    rate_audit_ip_max: int
+    rate_audit_ip_window: int
+    max_concurrent_scrapers: int
+
+    @classmethod
+    def from_settings(
+        cls,
+        s: "Settings",
+        *,
+        rate_validate_max: int,
+        rate_validate_window: int,
+        rate_audit_max: int,
+        rate_audit_window: int,
+        rate_audit_ip_max: int,
+        rate_audit_ip_window: int,
+        max_concurrent_scrapers: int,
+    ) -> "PublicConfig":
+        """
+        Único ponto de extração de dados de Settings para PublicConfig.
+
+        Campos sensíveis (SECRET_KEY, SALT_KEY, SALT_2, GOOGLE_CLIENT_*)
+        não existem em PublicConfig e não podem ser passados ao template
+        por nenhum caminho acidental.
+        """
+        course_codes_raw = s.ELIGIBLE_COURSE_CODES.strip()
+        course_codes_list = s.eligible_course_codes_list  # None | [] | [str]
+
+        return cls(
+            vote_title=s.VOTE_TITLE,
+            vote_question=s.VOTE_QUESTION,
+            vote_options=s.vote_options_list,
+            course_codes_raw=course_codes_raw,
+            course_codes=course_codes_list or [],
+            unit_codes=s.eligible_unit_codes_list,
+            keywords=s.eligible_keywords_list,
+            base_url=s.BASE_URL,
+            database_url=s.DATABASE_URL,
+            debug=s.DEBUG,
+            oauth_configured=bool(s.GOOGLE_CLIENT_ID and s.GOOGLE_CLIENT_SECRET),
+            rate_validate_max=rate_validate_max,
+            rate_validate_window=rate_validate_window,
+            rate_audit_max=rate_audit_max,
+            rate_audit_window=rate_audit_window,
+            rate_audit_ip_max=rate_audit_ip_max,
+            rate_audit_ip_window=rate_audit_ip_window,
+            max_concurrent_scrapers=max_concurrent_scrapers,
+        )
