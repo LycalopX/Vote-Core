@@ -603,10 +603,10 @@ class TestScraperParsingStress:
     def test_nusp_pattern_rejects_invalid(self):
         """NUSP_PATTERN não deve dar match em textos sem NUSP."""
         no_match_cases = [
-            "Código de Controle: 18BC9CXRL8HN",  # código de controle, não NUSP
+            "Código de Controle: 18BC9CXRL8HN"
             "RG: 12.345.678-9",
             "CPF: 123.456.789-00",
-            "12345678",  # número sem contexto
+            "12345678",
         ]
         for text in no_match_cases:
             match = NUSP_PATTERN.search(text)
@@ -629,7 +629,7 @@ class TestScraperParsingStress:
 
         start = time.monotonic()
         for _ in range(1000):
-            result = _check_eligibility(text, BigKeywordSettings())
+            result = _check_eligibility(text, "", BigKeywordSettings())
         elapsed = time.monotonic() - start
 
         assert result is True, "Deveria ser elegível"
@@ -649,7 +649,7 @@ class TestScraperParsingStress:
             "Curso: 97001 - Engenharia de Computação\n"
         )
         # Curso 97001 não está na lista [97999] → inelegível, mesmo com unidade e keyword corretas
-        assert _check_eligibility(text, CourseFilterSettings()) is False
+        assert _check_eligibility(text, "97001", CourseFilterSettings()) is False
 
     def test_eligibility_no_filters_accepts_all(self):
         """Sem filtros definidos, qualquer texto é elegível."""
@@ -659,7 +659,7 @@ class TestScraperParsingStress:
             eligible_unit_codes_list = []
             eligible_keywords_list = []
 
-        assert _check_eligibility("qualquer texto aleatório", NoFilterSettings()) is True
+        assert _check_eligibility("qualquer texto aleatório", "", NoFilterSettings()) is True
 
     def test_parse_code_concurrent_100_calls(self):
         """
@@ -706,10 +706,8 @@ class TestMemoryAndState:
                 _check_rate_limit(ip)
             assert len(_rate_limit_store[ip]) == 5
 
-            # Avançar o tempo além da janela
             fake_now[0] = 200.0
-            _check_rate_limit(ip)  # nova tentativa → timestamps antigos purgados
-            # Deve ter apenas 1 timestamp (o novo)
+            _check_rate_limit(ip)
             assert len(_rate_limit_store[ip]) == 1
         finally:
             main_module.time.monotonic = original

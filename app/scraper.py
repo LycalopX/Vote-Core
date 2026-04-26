@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 class DocumentData:
     """Dados extraídos do atestado do Júpiter."""
 
-    nusp: str       # Número USP ex: '12345678' (usado para hash de deduplicação)
-    rg: str         # RG bruto ex: '13.560.200-9' (apenas para log de debug parcial)
-    curso: str      # Nome do curso ex: 'Engenharia de Computação'
-    unidade: str    # Unidade ex: 'Escola de Engenharia de São Carlos'
-    nome: str       # Nome do aluno
+    nusp: str        # Número USP ex: '12345678' (usado para hash de deduplicação)
+    curso: str       # Nome do curso ex: 'Engenharia de Computação'
+    course_code: str # Código numérico do curso ex: '97001'
+    unidade: str     # Unidade ex: 'Escola de Engenharia de São Carlos'
+    nome: str        # Nome do aluno
     is_eligible: bool  # Se o aluno é elegível para votar
 
 
@@ -68,13 +68,16 @@ class ExtractionError(ScraperError):
 
 # ─── Regexes para extração de dados do PDF ───────────────────────
 
-# RG no formato XX.XXX.XXX-X ou variações
-RG_PATTERN = re.compile(r"(\d{1,2}\.?\d{3}\.?\d{3}-[\dXx])")
-
 # Código USP (NUSP) — 7 ou 8 dígitos
 NUSP_PATTERN = re.compile(r"código\s+USP\s+(\d{7,8})", re.IGNORECASE)
 
-# Curso — captura após "curso de" ou "Curso:"
+# Código numérico do curso — ex: '97001' em 'Curso: 97001 - Engenharia de Computação'
+COURSE_CODE_PATTERN = re.compile(
+    r"Curso[:\s]+(\d{4,6})\s*-",
+    re.IGNORECASE,
+)
+
+# Curso — captura o nome após o código numérico
 CURSO_PATTERN = re.compile(
     r"(?:curso\s+de\s+|Curso[:\s]+\d+\s*-\s*)(.+?)(?:\s*,|\s*\.|\s*\n|\s*do\s)",
     re.IGNORECASE,
@@ -137,13 +140,13 @@ def extract_data_from_pdf(pdf_bytes: bytes) -> DocumentData:
     if not nusp:
         raise ExtractionError("NUSP (Número USP) não encontrado no documento")
 
-    # ── Extrair RG (apenas para log de debug parcial) ──
-    rg = ""
-    rg_match = RG_PATTERN.search(full_text)
-    if rg_match:
-        rg = rg_match.group(1)
+    # ── Extrair código numérico do curso (ex: '97001') ──
+    course_code = ""
+    course_code_match = COURSE_CODE_PATTERN.search(full_text)
+    if course_code_match:
+        course_code = course_code_match.group(1).strip()
 
-    # ── Extrair Curso ──
+    # ── Extrair nome do curso ──
     curso = ""
     curso_match = CURSO_PATTERN.search(full_text)
     if curso_match:
@@ -162,59 +165,61 @@ def extract_data_from_pdf(pdf_bytes: bytes) -> DocumentData:
         nome = nome_match.group(1).strip()
 
     # ── Verificar elegibilidade ──
-    is_eligible = _check_eligibility(full_text, settings)
+    is_eligible = _check_eligibility(full_text, course_code, settings)
 
     logger.info(
-        "Dados extraídos — NUSP: %s..., RG: %s...%s, Curso: %s, Elegível: %s",
+        "Dados extraídos — NUSP: %s..., Curso: %s (%s), Elegível: %s",
         nusp[:3],
-        rg[:4] if rg else "N/A",
-        rg[-2:] if rg else "",
         curso,
+        course_code or "sem código",
         is_eligible,
     )
 
     return DocumentData(
         nusp=nusp,
-        rg=rg,
         curso=curso,
+        course_code=course_code,
         unidade=unidade,
         nome=nome,
         is_eligible=is_eligible,
     )
 
 
-def _check_eligibility(text: str, settings) -> bool:
+def _check_eligibility(text: str, course_code: str, settings) -> bool:
     """
     Verifica se o aluno é elegível baseado nos critérios do .env.
 
-    Checa:
-    1. Código de unidade (ex: '97' para EESC)
-    2. Keywords no texto (ex: 'Escola de Engenharia de São Carlos')
+    Cascata de prioridade:
+    1. Se ELIGIBLE_COURSE_CODES estiver definido → usa APENAS o código numérico
+       do curso (ex: '97001'). Unidade e keywords são ignoradas.
+    2. Se ELIGIBLE_COURSE_CODES vazio → checa ELIGIBLE_UNIT_CODES no texto.
+    3. Se ELIGIBLE_UNIT_CODES vazio → checa ELIGIBLE_KEYWORDS no texto.
+    4. Se nenhum filtro definido → aceita qualquer aluno.
     """
 
+    # ── Prioridade 1: filtro por código de curso ──
+    if settings.eligible_course_codes_list:
+        return course_code in settings.eligible_course_codes_list
 
-    # Checar código de unidade
-    code_elegible = False
+    # ── Prioridade 2: filtro por código de unidade ──
+    if settings.eligible_unit_codes_list:
+        unit_eligible = any(
+            code and re.search(rf"\b{re.escape(code)}\s*-", text)
+            for code in settings.eligible_unit_codes_list
+        )
+        if not unit_eligible:
+            return False
 
-    if not settings.eligible_unit_codes_list: 
-        code_elegible = True
-    
-    for code in settings.eligible_unit_codes_list:
-        if code and re.search(rf"\b{re.escape(code)}\s*-", text):
-            code_elegible = True
+    # ── Prioridade 3: filtro por keywords ──
+    if settings.eligible_keywords_list:
+        keyword_eligible = any(
+            kw and kw.lower() in text.lower()
+            for kw in settings.eligible_keywords_list
+        )
+        if not keyword_eligible:
+            return False
 
-    # Checar keywords
-    keyword_elegible = False
-
-    if not settings.eligible_keywords_list:
-        keyword_elegible = True
-
-    for keyword in settings.eligible_keywords_list:
-        if keyword and keyword.lower() in text.lower():
-            keyword_elegible = True
-
-
-    return code_elegible and keyword_elegible
+    return True
 
 
 # ─── Scraper Playwright ──────────────────────────────────────────

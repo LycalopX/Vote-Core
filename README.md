@@ -246,12 +246,6 @@ pytest tests/ -v
 # Cobertura: crypto (15), database (9), schema (2)
 ```
 
-## 👥 Time
-
-- **Alex (LycalopX)** — Core & Validação (scraper, cripto, backend, frontend)
-- **Eduardo Paiva** — Banco de Dados, Infraestrutura & Revisão de Segurança
-- **Gabriel Yamauti** — Auditoria de Código & Documentação
-
 ## Licença
 
 Uso interno EESC-USP. Código aberto para auditoria.

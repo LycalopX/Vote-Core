@@ -362,54 +362,54 @@ SAMPLE_PDF_TEXT = (
 
 def test_eligibility_sem_filtros_aceita_todos():
     """Sem nenhum filtro configurado, qualquer aluno é elegível."""
-    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings()) is True
+    assert _check_eligibility(SAMPLE_PDF_TEXT, "97001", FakeSettings()) is True
 
 
 def test_eligibility_unit_match():
     """Unidade 97 deve dar match."""
-    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(units="97")) is True
+    assert _check_eligibility(SAMPLE_PDF_TEXT, "97001", FakeSettings(units="97")) is True
 
 
 def test_eligibility_unit_no_match():
     """Unidade 55 NÃO deve dar match."""
-    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(units="55")) is False
+    assert _check_eligibility(SAMPLE_PDF_TEXT, "97001", FakeSettings(units="55")) is False
 
 
 def test_eligibility_course_match():
     """Curso 97001 deve dar match."""
-    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(courses="97001")) is True
+    assert _check_eligibility(SAMPLE_PDF_TEXT, "97001", FakeSettings(courses="97001")) is True
 
 
 def test_eligibility_course_no_match():
     """Curso 97002 NÃO deve dar match (curso diferente)."""
-    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(courses="97002")) is False
+    assert _check_eligibility(SAMPLE_PDF_TEXT, "97001", FakeSettings(courses="97002")) is False
 
 
 def test_eligibility_course_prioridade_sobre_unidade():
     """Se ELIGIBLE_COURSE_CODES definido, unidade é IGNORADA."""
     # Curso errado + unidade certa = NÃO elegível (curso tem prioridade)
     assert _check_eligibility(
-        SAMPLE_PDF_TEXT, FakeSettings(units="97", courses="97002")
+        SAMPLE_PDF_TEXT, "97001", FakeSettings(units="97", courses="97002")
     ) is False
 
 
 def test_eligibility_course_lista_com_match():
     """Lista de cursos com pelo menos um match deve aceitar."""
     assert _check_eligibility(
-        SAMPLE_PDF_TEXT, FakeSettings(courses="97002,97001")
+        SAMPLE_PDF_TEXT, "97001", FakeSettings(courses="97002,97001")
     ) is True
 
 
 def test_eligibility_keyword_match():
     """Keyword presente no texto deve dar match."""
     assert _check_eligibility(
-        SAMPLE_PDF_TEXT, FakeSettings(keywords="Engenharia de Computação")
+        SAMPLE_PDF_TEXT, "97001", FakeSettings(keywords="Engenharia de Computação")
     ) is True
 
 
 def test_eligibility_keyword_no_match():
     """Keyword 'EESC' NÃO aparece no PDF do Júpiter."""
-    assert _check_eligibility(SAMPLE_PDF_TEXT, FakeSettings(keywords="EESC")) is False
+    assert _check_eligibility(SAMPLE_PDF_TEXT, "97001", FakeSettings(keywords="EESC")) is False
 
 
 # ─── Config: propriedades computadas ─────────────────────────────
