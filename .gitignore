@@ -47,3 +47,6 @@ temp/
 
 # Backups do banco de dados
 backups/
+
+# Tests
+tests/

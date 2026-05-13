@@ -67,6 +67,29 @@ AUDIT_IP_RATE_LIMIT_WINDOW = 60   # janela de 1 minuto
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 
 
+def _get_client_ip(request: Request) -> str:
+    """
+    Extrai o IP real do visitante, respeitando a cadeia de proxies.
+
+    Ordem de prioridade:
+      1. CF-Connecting-IP  — injetado pelo Cloudflare Tunnel com o IP do browser.
+      2. X-Forwarded-For   — padrão de proxies genéricos; pega o primeiro da lista.
+      3. request.client.host — fallback direto (só válido sem proxy).
+
+    Sem esta lógica, todos os usuários chegam com o mesmo IP interno do
+    cloudflared (127.0.0.1), esgotando o rate limit global após 5 tentativas.
+    """
+    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
+    if cf_ip:
+        return cf_ip
+
+    xff = request.headers.get("X-Forwarded-For", "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+
+    return request.client.host if request.client else "unknown"
+
+
 def _check_rate_limit(ip: str) -> bool:
     """
     Retorna True se o IP está dentro do limite.
@@ -310,7 +333,7 @@ async def validate_submit(request: Request, control_code: str = Form(...)):
     error = ""
     try:
         # ── Rate limit por IP ──
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _get_client_ip(request)
         if not _check_rate_limit(client_ip):
             logger.warning("Rate limit excedido para IP %s", client_ip)
             return templates.TemplateResponse(
@@ -574,7 +597,7 @@ async def audit_submit(
 
     # ── Rate limit por IP (anti-enumeração de NUSPs) ──
     # Bloqueia atacantes que rotacionam NUSPs para contornar o limite por NUSP.
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _get_client_ip(request)
     if not _check_audit_ip_rate_limit(client_ip):
         logger.warning("Rate limit de IP no audit excedido")
         return templates.TemplateResponse(
